@@ -1,29 +1,59 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import Navbar from './components/Navbar.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import CategoryBar from './components/CategoryBar.jsx';
 import VideoCard from './components/VideoCard.jsx';
-import ShortsCard from './components/ShortsCard.jsx';
 import VideoPlayer from './components/VideoPlayer.jsx';
 import WatchLaterPage from './components/WatchLaterPage.jsx';
 import SearchResultsPage from './components/SearchResultsPage.jsx';
 import SubscriptionsPage from './components/SubscriptionsPage.jsx';
 import LikedVideosPage from './components/LikedVideosPage.jsx';
+import PlaylistsPage from './components/PlaylistsPage.jsx';
+import SaveToPlaylistModal from './components/SaveToPlaylistModal.jsx';
 import AuthModal from './components/AuthModal.jsx';
 import { apiUrl } from './config/api.js';
-import {
-  ShortsIcon,
-  MusicIcon,
-  GamepadIcon,
-  CodeIcon,
-  FlameIcon,
-  ClockIcon,
-} from './components/Icons.jsx';
 
 const DEFAULT_SUBSCRIBED_CHANNELS = [];
 
 export default function App() {
-  const [activePage, setActivePage] = useState('home'); // 'home' | 'watch' | 'watch-later' | 'search' | 'subscriptions' | 'liked'
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Determine active page and parameters from current URL
+  const pathname = location.pathname.replace(/\/$/, '') || '/';
+  let activePage = 'home';
+  if (pathname === '/subscriptions' || pathname === '/feed/subscriptions') {
+    activePage = 'subscriptions';
+  } else if (
+    pathname === '/liked' ||
+    (pathname === '/playlist' && searchParams.get('list') === 'LL')
+  ) {
+    activePage = 'liked';
+  } else if (
+    pathname === '/watch-later' ||
+    (pathname === '/playlist' && searchParams.get('list') === 'WL')
+  ) {
+    activePage = 'watch-later';
+  } else if (
+    pathname === '/playlists' ||
+    pathname === '/playlist'
+  ) {
+    activePage = 'playlists';
+  } else if (pathname === '/results' || pathname === '/search') {
+    activePage = 'search';
+  } else if (pathname === '/watch') {
+    activePage = 'watch';
+  }
+
+  // Active query parameters
+  const searchQuery =
+    searchParams.get('search_query') || searchParams.get('q') || '';
+  const category = searchParams.get('category') || 'All';
+  const activeVideoId = searchParams.get('v') || '';
+
+  // Watch video state
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [relatedVideos, setRelatedVideos] = useState([]);
 
@@ -31,19 +61,13 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  // Home Multi-Content Sections
-  const [homeSections, setHomeSections] = useState(null);
-  const [loadingSections, setLoadingSections] = useState(false);
-
   // Feed & Infinite scroll
   const [videos, setVideos] = useState([]);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [category, setCategory] = useState('All');
-
+  // User state
   const [user, setUser] = useState(null);
   const [watchLaterIds, setWatchLaterIds] = useState(() => {
     try {
@@ -86,13 +110,17 @@ export default function App() {
     }
   });
 
+  // Playlists State
+  const [playlists, setPlaylists] = useState([]);
+  const [saveToPlaylistTarget, setSaveToPlaylistTarget] = useState(null);
+  const [playlistContext, setPlaylistContext] = useState(null);
+
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [toast, setToast] = useState(null);
 
   const observerRef = useRef(null);
   const sentinelRef = useRef(null);
   const isFetchingRef = useRef(false);
-  const isFetchingHomeRef = useRef(false);
   const fetchIdRef = useRef(0);
 
   const showToast = useCallback((message) => {
@@ -102,25 +130,53 @@ export default function App() {
     }, 3000);
   }, []);
 
+  // Load all user data from backend MongoDB (Personalized account storage)
+  const loadUserData = useCallback(async (token) => {
+    if (!token) return;
+    try {
+      const headers = { Authorization: `Bearer ${token}` };
+      const [meRes, likedRes, subsRes, plRes, wlRes] = await Promise.allSettled([
+        fetch(apiUrl('/api/auth/me'), { headers }),
+        fetch(apiUrl('/api/liked-videos'), { headers }),
+        fetch(apiUrl('/api/subscriptions'), { headers }),
+        fetch(apiUrl('/api/playlists'), { headers }),
+        fetch(apiUrl('/api/watch-later'), { headers }),
+      ]);
+
+      if (meRes.status === 'fulfilled' && meRes.value.ok) {
+        const data = await meRes.value.json();
+        setUser(data.user);
+      }
+      if (likedRes.status === 'fulfilled' && likedRes.value.ok) {
+        const data = await likedRes.value.json();
+        setLikedVideos(data.videos || []);
+        setLikedVideoIds(data.likedVideoIds || (data.videos || []).map((v) => v.videoId));
+      }
+      if (subsRes.status === 'fulfilled' && subsRes.value.ok) {
+        const data = await subsRes.value.json();
+        setSubscribedChannels(data.subscribedChannels || []);
+      }
+      if (plRes.status === 'fulfilled' && plRes.value.ok) {
+        const data = await plRes.value.json();
+        setPlaylists(data.playlists || []);
+      }
+      if (wlRes.status === 'fulfilled' && wlRes.value.ok) {
+        const data = await wlRes.value.json();
+        setWatchLaterVideos(data.videos || []);
+        setWatchLaterIds(data.watchLaterIds || (data.videos || []).map((v) => v.videoId));
+      }
+    } catch (err) {
+      console.error('Error loading personalized user data:', err);
+    }
+  }, []);
+
   // Restore authenticated user session on mount
   useEffect(() => {
     const token = localStorage.getItem('bintube_token');
     if (token) {
-      fetch(apiUrl('/api/auth/me'), {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((res) => (res.ok ? res.json() : Promise.reject()))
-        .then((data) => {
-          setUser(data.user);
-          if (data.user.watchLaterIds) {
-            setWatchLaterIds(data.user.watchLaterIds);
-          }
-        })
-        .catch(() => {
-          localStorage.removeItem('bintube_token');
-        });
+      loadUserData(token);
     }
-  }, []);
+  }, [loadUserData]);
 
   // Update document title for SEO & YouTube experience
   useEffect(() => {
@@ -132,39 +188,76 @@ export default function App() {
       document.title = 'Subscriptions - YouTube';
     } else if (activePage === 'liked') {
       document.title = 'Liked videos - YouTube';
+    } else if (activePage === 'playlists') {
+      document.title = 'Playlists - YouTube';
     } else if (activePage === 'search') {
-      document.title = `${searchQuery} - YouTube Search`;
+      document.title = searchQuery
+        ? `${searchQuery} - YouTube Search`
+        : 'Search - YouTube';
+    } else if (category && category !== 'All') {
+      document.title = `${category} - YouTube`;
     } else {
       document.title = 'YouTube';
     }
-  }, [activePage, selectedVideo, searchQuery]);
+  }, [activePage, selectedVideo, searchQuery, category]);
 
-  // Fetch Home Multi-Content Sections with randomizer on every refresh
-  const loadHomeSections = useCallback(async (_force = false) => {
-    if (isFetchingHomeRef.current) return;
-    isFetchingHomeRef.current = true;
-    setLoadingSections(true);
-    try {
-      const res = await fetch(apiUrl(`/api/videos/home-sections?_t=${Date.now()}`));
-      const data = await res.json();
-      if (res.ok) {
-        setHomeSections(data);
-        if (data.feed && data.feed.length > 0) {
-          setVideos(data.feed);
-        }
-      }
-    } catch (err) {
-      console.error('Error loading home sections:', err);
-    } finally {
-      setLoadingSections(false);
-      isFetchingHomeRef.current = false;
+  // Synchronize /watch page with URL parameter ?v=...
+  useEffect(() => {
+    if (activePage !== 'watch') return;
+
+    if (!activeVideoId) {
+      navigate('/', { replace: true });
+      return;
     }
-  }, []);
+
+    const currentId = selectedVideo?.videoId || selectedVideo?._id;
+    const hasFullDetails = selectedVideo?.hasFullDetails;
+
+    // If already on this video and full details are loaded, just ensure related are loaded
+    if (currentId === activeVideoId && hasFullDetails) {
+      if (relatedVideos.length === 0) {
+        fetch(apiUrl(`/api/videos/${encodeURIComponent(activeVideoId)}`))
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.related?.length) {
+              setRelatedVideos(data.related);
+            }
+          })
+          .catch(console.error);
+      }
+      return;
+    }
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // If passed via Link state, show video preview instantly without waiting for fetch
+    if (
+      location.state?.video &&
+      (location.state.video.videoId === activeVideoId ||
+        location.state.video._id === activeVideoId)
+    ) {
+      setSelectedVideo(location.state.video);
+    }
+
+    // Always fetch full video details (complete description, author details) & related videos
+    fetch(apiUrl(`/api/videos/${encodeURIComponent(activeVideoId)}`))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.video) {
+          setSelectedVideo(data.video);
+        }
+        if (data?.related) {
+          setRelatedVideos(data.related);
+        }
+      })
+      .catch((err) => {
+        console.error('Error fetching video for watch page:', err);
+      });
+  }, [activePage, activeVideoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch Videos with pagination, cancellation of stale requests, and strict deduplication
   const fetchVideos = useCallback(
     async (pageToFetch, isReset = false) => {
-      // If resetting, never get blocked by a stale in-flight request
       if (!isReset && isFetchingRef.current) return;
       isFetchingRef.current = true;
       setLoading(true);
@@ -175,7 +268,7 @@ export default function App() {
         const queryTerm = activePage === 'search' ? searchQuery : '';
         const params = new URLSearchParams({
           page: pageToFetch,
-          limit: 12,
+          limit: 18,
           category: category !== 'All' ? category : '',
           q: queryTerm,
           _t: Date.now(),
@@ -184,7 +277,7 @@ export default function App() {
         const res = await fetch(apiUrl(`/api/videos?${params.toString()}`));
         const data = await res.json();
 
-        // Discard response if a newer request or category switch occurred in the meantime
+        // Discard response if a newer request occurred in the meantime
         if (thisFetchId !== fetchIdRef.current) return;
 
         if (res.ok && data.videos) {
@@ -222,36 +315,15 @@ export default function App() {
     [category, searchQuery, activePage]
   );
 
-  // Dedicated category selection: instantly wipes old category videos and resets state
-  const handleSelectCategory = useCallback(
-    (newCat) => {
-      if (newCat === category) return;
-      fetchIdRef.current++; // Invalidate any pending network requests from old category
-      isFetchingRef.current = false;
-      setVideos([]); // Immediately clear old category videos from screen
-      setPage(1);
-      setHasMore(true);
-      setLoading(true);
-      setCategory(newCat);
-    },
-    [category]
-  );
-
-  // Handle category or page change
+  // Fetch videos whenever category, search query, or page mode changes
   useEffect(() => {
     setPage(1);
-    if (activePage === 'home') {
-      if (category === 'All' && !searchQuery) {
-        loadHomeSections(true);
-      } else {
-        fetchVideos(1, true);
-      }
-    } else if (activePage === 'search') {
+    if (activePage === 'home' || activePage === 'search') {
       fetchVideos(1, true);
     }
-  }, [category, searchQuery, activePage, loadHomeSections, fetchVideos]);
+  }, [category, searchQuery, activePage, fetchVideos]);
 
-  // Infinite Scroll IntersectionObserver with debouncing and safeguards
+  // Infinite Scroll IntersectionObserver
   useEffect(() => {
     if (activePage !== 'home' && activePage !== 'search') return;
     if (observerRef.current) observerRef.current.disconnect();
@@ -264,7 +336,6 @@ export default function App() {
           entries[0].isIntersecting &&
           hasMore &&
           !loading &&
-          !loadingSections &&
           !isFetchingRef.current &&
           videos.length > 0
         ) {
@@ -285,8 +356,9 @@ export default function App() {
       if (observerRef.current) observerRef.current.disconnect();
       if (debounceTimer) clearTimeout(debounceTimer);
     };
-  }, [activePage, hasMore, loading, loadingSections, page, videos.length, fetchVideos]);
+  }, [activePage, hasMore, loading, page, videos.length, fetchVideos]);
 
+  // Load Watch Later Videos
   // Load Watch Later Videos
   const loadWatchLaterVideos = useCallback(async () => {
     const token = localStorage.getItem('bintube_token');
@@ -297,8 +369,8 @@ export default function App() {
         });
         if (res.ok) {
           const data = await res.json();
-          setWatchLaterVideos(data.videos);
-          setWatchLaterIds(data.watchLaterIds || data.videos.map((v) => v.videoId));
+          setWatchLaterVideos(data.videos || []);
+          setWatchLaterIds(data.watchLaterIds || (data.videos || []).map((v) => v.videoId));
         }
       } catch (err) {
         console.error('Failed to load watch later from server:', err);
@@ -307,143 +379,395 @@ export default function App() {
       try {
         const stored = JSON.parse(localStorage.getItem('yt_guest_wl_v') || '[]');
         setWatchLaterVideos(stored);
-      } catch { }
+      } catch {}
     }
   }, []);
 
+  // Load Liked Videos
+  const loadLikedVideos = useCallback(async () => {
+    const token = localStorage.getItem('bintube_token');
+    if (token) {
+      try {
+        const res = await fetch(apiUrl('/api/liked-videos'), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setLikedVideos(data.videos || []);
+          setLikedVideoIds(data.likedVideoIds || (data.videos || []).map((v) => v.videoId));
+        }
+      } catch (err) {
+        console.error('Failed to load liked videos from server:', err);
+      }
+    }
+  }, []);
+
+  // Load Subscriptions
+  const loadSubscriptions = useCallback(async () => {
+    const token = localStorage.getItem('bintube_token');
+    if (token) {
+      try {
+        const res = await fetch(apiUrl('/api/subscriptions'), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSubscribedChannels(data.subscribedChannels || []);
+        }
+      } catch (err) {
+        console.error('Failed to load subscriptions from server:', err);
+      }
+    }
+  }, []);
+
+  // Load Playlists
+  const loadPlaylists = useCallback(async () => {
+    const token = localStorage.getItem('bintube_token');
+    if (token) {
+      try {
+        const res = await fetch(apiUrl('/api/playlists'), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPlaylists(data.playlists || []);
+        }
+      } catch (err) {
+        console.error('Failed to load playlists from server:', err);
+      }
+    }
+  }, []);
+
+  // Refresh page collections whenever activePage changes
   useEffect(() => {
     if (activePage === 'watch-later') {
       loadWatchLaterVideos();
+    } else if (activePage === 'liked') {
+      loadLikedVideos();
+    } else if (activePage === 'subscriptions') {
+      loadSubscriptions();
+    } else if (activePage === 'playlists') {
+      loadPlaylists();
     }
-  }, [activePage, loadWatchLaterVideos]);
+  }, [activePage, loadWatchLaterVideos, loadLikedVideos, loadSubscriptions, loadPlaylists]);
 
-  // Select video to watch (loads genuinely related videos for that specific video)
-  const handleSelectVideo = async (video) => {
-    setSelectedVideo(video);
-    setRelatedVideos([]);
-    setActivePage('watch');
-    setIsDrawerOpen(false);
-
-    const vId = video.videoId || video._id;
-    try {
-      const res = await fetch(apiUrl(`/api/videos/${vId}`));
-      if (res.ok) {
-        const data = await res.json();
-        if (data.video) {
-          setSelectedVideo(data.video);
-        }
-        if (data.related && data.related.length > 0) {
-          setRelatedVideos(data.related);
-        }
-      }
-    } catch (err) {
-      console.error('Error loading related videos:', err);
-    }
-  };
-
-  // Liked Videos Handlers
-  const handleToggleLike = (video) => {
-    const vId = video.videoId || video._id;
-    const exists = likedVideoIds.includes(vId);
-    let updatedIds;
-    let updatedVideos;
-
-    if (exists) {
-      updatedIds = likedVideoIds.filter((id) => id !== vId);
-      updatedVideos = likedVideos.filter((v) => (v.videoId || v._id) !== vId);
-      showToast('Removed from Liked videos');
-    } else {
-      updatedIds = [vId, ...likedVideoIds];
-      updatedVideos = [video, ...likedVideos];
-      showToast('Added to Liked videos');
-    }
-
-    setLikedVideoIds(updatedIds);
-    setLikedVideos(updatedVideos);
-    localStorage.setItem('yt_liked_video_ids', JSON.stringify(updatedIds));
-    localStorage.setItem('yt_liked_videos', JSON.stringify(updatedVideos));
-  };
-
-  const handleRemoveLike = (videoId) => {
-    const updatedIds = likedVideoIds.filter((id) => id !== videoId);
-    const updatedVideos = likedVideos.filter((v) => (v.videoId || v._id) !== videoId);
-    setLikedVideoIds(updatedIds);
-    setLikedVideos(updatedVideos);
-    localStorage.setItem('yt_liked_video_ids', JSON.stringify(updatedIds));
-    localStorage.setItem('yt_liked_videos', JSON.stringify(updatedVideos));
-    showToast('Removed from Liked videos');
-  };
-
-  const handleClearLikedVideos = () => {
-    setLikedVideoIds([]);
-    setLikedVideos([]);
-    localStorage.removeItem('yt_liked_video_ids');
-    localStorage.removeItem('yt_liked_videos');
-    showToast('Liked videos cleared');
-  };
-
-  // Subscriptions Handlers
-  const handleToggleSubscribe = (channelInfo) => {
-    const name = channelInfo.channelName;
-    const exists = subscribedChannels.some(
-      (c) => c.channelName.toLowerCase() === name.toLowerCase()
-    );
-    let updated;
-    if (exists) {
-      updated = subscribedChannels.filter(
-        (c) => c.channelName.toLowerCase() !== name.toLowerCase()
-      );
-      showToast(`Unsubscribed from ${name}`);
-    } else {
-      updated = [
-        ...subscribedChannels,
-        {
-          channelName: name,
-          channelAvatar:
-            channelInfo.channelAvatar ||
-            `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=cc0000&color=fff&size=100`,
-          subscriberCount: channelInfo.subscriberCount || '1.2M subscribers',
-        },
-      ];
-      showToast(`Subscribed to ${name}`);
-    }
-    setSubscribedChannels(updated);
-    localStorage.setItem('yt_subscribed_channels', JSON.stringify(updated));
-  };
-
+  // Dedicated Navigation Handlers with real URLs
   const handleNavigate = (pageName) => {
-    if (pageName === 'home') {
-      setSelectedVideo(null);
-      setSearchQuery('');
-      setCategory('All');
-      if (activePage === 'home' && category === 'All') {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        loadHomeSections(true);
-      }
-    }
-    setActivePage(pageName);
     setIsDrawerOpen(false);
+    if (pageName === 'home') {
+      navigate('/');
+    } else if (pageName === 'subscriptions') {
+      navigate('/subscriptions');
+    } else if (pageName === 'liked') {
+      navigate('/liked');
+    } else if (pageName === 'watch-later') {
+      navigate('/watch-later');
+    } else if (pageName === 'playlists') {
+      navigate('/playlists');
+    } else if (pageName === 'search') {
+      navigate(`/results?search_query=${encodeURIComponent(searchQuery || '')}`);
+    }
   };
 
-  // Search initiates navigation to dedicated search results page
+  const handleSelectCategory = (newCat) => {
+    setIsDrawerOpen(false);
+    fetchIdRef.current++;
+    isFetchingRef.current = false;
+    setVideos([]);
+    setPage(1);
+    setHasMore(true);
+    setLoading(true);
+
+    if (newCat === 'All') {
+      navigate('/');
+    } else {
+      navigate(`/?category=${encodeURIComponent(newCat)}`);
+    }
+  };
+
   const handleSearch = (query) => {
     if (!query || !query.trim()) return;
     const cleanQuery = query.trim();
-    // Clear old cached videos immediately and activate top line loader
+    setIsDrawerOpen(false);
     setVideos([]);
     setLoading(true);
-    setSearchQuery(cleanQuery);
-    setActivePage('search');
-    setCategory('All');
-    setIsDrawerOpen(false);
+    navigate(`/results?search_query=${encodeURIComponent(cleanQuery)}`);
   };
 
-  // Toggle Sidebar or Drawer based on active page
+  const handleSelectVideo = (video, newPlaylistContext = null) => {
+    const vId = video.videoId || video._id;
+    if (!vId) return;
+    setIsDrawerOpen(false);
+    setSelectedVideo(video);
+    setRelatedVideos([]);
+
+    if (newPlaylistContext !== null) {
+      setPlaylistContext(newPlaylistContext);
+    } else if (playlistContext && !playlistContext.videos.some((v) => (v.videoId || v._id) === vId)) {
+      setPlaylistContext(null);
+    }
+
+    navigate(`/watch?v=${encodeURIComponent(vId)}`, { state: { video } });
+  };
+
+  // Play All Playlist Videos in order
+  const handlePlayPlaylist = (playlistVideos, startIndex = 0, title = 'Playlist', id = 'playlist') => {
+    if (!playlistVideos || playlistVideos.length === 0) return;
+    const startVid = playlistVideos[startIndex] || playlistVideos[0];
+    const context = {
+      id,
+      title,
+      videos: playlistVideos,
+      currentIndex: startIndex,
+    };
+    setPlaylistContext(context);
+    handleSelectVideo(startVid, context);
+  };
+
+  // Auth protection helper
+  const requireAuth = (actionDescription = 'perform this action') => {
+    const token = localStorage.getItem('bintube_token');
+    if (!token || !user) {
+      setIsAuthModalOpen(true);
+      showToast(`Please sign in to ${actionDescription}`);
+      return false;
+    }
+    return true;
+  };
+
+  // Liked Videos Handlers (Backed by MongoDB User Account)
+  const handleToggleLike = async (video) => {
+    if (!requireAuth('like videos')) return;
+    const vId = video.videoId || video._id;
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+
+    try {
+      const res = await fetch(apiUrl(`/api/liked-videos/${vId}`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ video }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLikedVideoIds(data.likedVideoIds);
+        setLikedVideos(data.videos);
+        showToast(data.message);
+      }
+    } catch {
+      showToast('Error updating liked videos');
+    }
+  };
+
+  const handleRemoveLike = async (videoId) => {
+    if (!requireAuth('manage liked videos')) return;
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+
+    try {
+      const res = await fetch(apiUrl(`/api/liked-videos/${videoId}`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLikedVideoIds(data.likedVideoIds);
+        setLikedVideos(data.videos);
+        showToast(data.message);
+      }
+    } catch {
+      showToast('Removed from Liked videos');
+    }
+  };
+
+  const handleClearLikedVideos = async () => {
+    if (!requireAuth('clear liked videos')) return;
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+
+    try {
+      const res = await fetch(apiUrl('/api/liked-videos'), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLikedVideoIds([]);
+        setLikedVideos([]);
+        showToast(data.message);
+      }
+    } catch {
+      showToast('Error clearing liked videos');
+    }
+  };
+
+  // Subscriptions Handlers (Backed by MongoDB User Account)
+  const handleToggleSubscribe = async (channelInfo) => {
+    if (!requireAuth('subscribe to channels')) return;
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+
+    try {
+      const res = await fetch(apiUrl('/api/subscriptions'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(channelInfo),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSubscribedChannels(data.subscribedChannels);
+        showToast(data.message);
+      }
+    } catch {
+      showToast('Error updating subscription');
+    }
+  };
+
+  // Playlists Handlers (Backed by MongoDB User Account)
+  const handleCreatePlaylist = async (title, description = '', initialVideo = null) => {
+    if (!requireAuth('create playlists')) return;
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+
+    try {
+      const res = await fetch(apiUrl('/api/playlists'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title, description, initialVideo }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPlaylists(data.playlists);
+        showToast(data.message);
+        return data.playlist;
+      } else {
+        showToast(data.message || 'Failed to create playlist');
+      }
+    } catch {
+      showToast('Error creating playlist');
+    }
+  };
+
+  const handleDeletePlaylist = async (playlistId) => {
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+
+    try {
+      const res = await fetch(apiUrl(`/api/playlists/${playlistId}`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPlaylists(data.playlists);
+        showToast(data.message);
+      }
+    } catch {
+      showToast('Error deleting playlist');
+    }
+  };
+
+  const handleToggleVideoInPlaylist = async (playlistId, video, isCurrentlySaved) => {
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+
+    const vId = video.videoId || video._id;
+    try {
+      if (isCurrentlySaved) {
+        const res = await fetch(apiUrl(`/api/playlists/${playlistId}/videos/${vId}`), {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setPlaylists((prev) =>
+            prev.map((p) =>
+              p.id === playlistId
+                ? {
+                    ...p,
+                    videos: data.playlist.videos,
+                    videoCount: data.playlist.videos.length,
+                    coverThumbnail: data.playlist.videos[0]?.thumbnailUrl || '',
+                  }
+                : p
+            )
+          );
+          showToast(data.message);
+        }
+      } else {
+        const res = await fetch(apiUrl(`/api/playlists/${playlistId}/videos`), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ video }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setPlaylists((prev) =>
+            prev.map((p) =>
+              p.id === playlistId
+                ? {
+                    ...p,
+                    videos: data.playlist.videos,
+                    videoCount: data.playlist.videos.length,
+                    coverThumbnail: data.playlist.videos[0]?.thumbnailUrl || '',
+                  }
+                : p
+            )
+          );
+          showToast(data.message);
+        }
+      }
+    } catch {
+      showToast('Error updating playlist video');
+    }
+  };
+
+  const handleRemoveVideoFromPlaylist = async (playlistId, videoId) => {
+    const token = localStorage.getItem('bintube_token');
+    if (!token) return;
+    try {
+      const res = await fetch(apiUrl(`/api/playlists/${playlistId}/videos/${videoId}`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPlaylists((prev) =>
+          prev.map((p) =>
+            p.id === playlistId
+              ? {
+                  ...p,
+                  videos: data.playlist.videos,
+                  videoCount: data.playlist.videos.length,
+                  coverThumbnail: data.playlist.videos[0]?.thumbnailUrl || '',
+                }
+              : p
+          )
+        );
+        showToast(data.message);
+      }
+    } catch {
+      showToast('Error removing video from playlist');
+    }
+  };
+
+  // Toggle Sidebar or Drawer
   const handleToggleMenu = () => {
     if (activePage === 'watch') {
       setIsDrawerOpen((prev) => !prev);
     } else {
-      // Toggle standard sidebar on desktop; on mobile it acts as drawer
       if (window.innerWidth <= 900) {
         setIsDrawerOpen((prev) => !prev);
       } else {
@@ -452,8 +776,9 @@ export default function App() {
     }
   };
 
-  // Watch Later toggle
+  // Watch Later toggle (Backed by MongoDB User Account)
   const handleToggleWatchLater = async (video) => {
+    if (!requireAuth('save videos to Watch Later')) return;
     const vId = video.videoId || video._id;
     const token = localStorage.getItem('bintube_token');
 
@@ -475,29 +800,9 @@ export default function App() {
             loadWatchLaterVideos();
           }
         }
-      } catch (err) {
+      } catch {
         showToast('Error updating Watch Later');
       }
-    } else {
-      // Guest mode
-      const exists = watchLaterIds.includes(vId);
-      let updatedIds;
-      let updatedVideos;
-
-      if (exists) {
-        updatedIds = watchLaterIds.filter((id) => id !== vId);
-        updatedVideos = watchLaterVideos.filter((v) => (v.videoId || v._id) !== vId);
-        showToast('Removed from Watch Later');
-      } else {
-        updatedIds = [vId, ...watchLaterIds];
-        updatedVideos = [video, ...watchLaterVideos];
-        showToast('Saved to Watch Later (Guest)');
-      }
-
-      setWatchLaterIds(updatedIds);
-      setWatchLaterVideos(updatedVideos);
-      localStorage.setItem('yt_guest_wl', JSON.stringify(updatedIds));
-      localStorage.setItem('yt_guest_wl_v', JSON.stringify(updatedVideos));
     }
   };
 
@@ -520,16 +825,6 @@ export default function App() {
       } catch {
         showToast('Failed to remove video');
       }
-    } else {
-      const updatedIds = watchLaterIds.filter((id) => id !== videoId);
-      const updatedVideos = watchLaterVideos.filter(
-        (v) => (v.videoId || v._id) !== videoId
-      );
-      setWatchLaterIds(updatedIds);
-      setWatchLaterVideos(updatedVideos);
-      localStorage.setItem('yt_guest_wl', JSON.stringify(updatedIds));
-      localStorage.setItem('yt_guest_wl_v', JSON.stringify(updatedVideos));
-      showToast('Removed from Watch Later');
     }
   };
 
@@ -549,49 +844,29 @@ export default function App() {
       } catch {
         showToast('Failed to clear playlist');
       }
-    } else {
-      setWatchLaterIds([]);
-      setWatchLaterVideos([]);
-      localStorage.removeItem('yt_guest_wl');
-      localStorage.removeItem('yt_guest_wl_v');
-      showToast('Watch Later playlist cleared');
     }
-  };
-
-  // Download video directly to user's device without redirecting
-  const handleDownload = (video) => {
-    const vId = video.videoId || video._id;
-    const safeTitle = (video.title || 'video')
-      .replace(/[^a-zA-Z0-9_\-\s]/g, '')
-      .trim()
-      .slice(0, 50) || 'video';
-    showToast(`Downloading: ${video.title.slice(0, 35)}...`);
-
-    const link = document.createElement('a');
-    link.href = apiUrl(`/api/videos/${vId}/download`);
-    link.setAttribute('download', `${safeTitle}.mp4`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   // Auth handlers
   const handleAuthSuccess = (data) => {
     localStorage.setItem('bintube_token', data.token);
     setUser(data.user);
-    if (data.user.watchLaterIds) {
-      setWatchLaterIds(data.user.watchLaterIds);
-    }
+    loadUserData(data.token);
+    showToast(`Welcome back, ${data.user.username}!`);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('bintube_token');
     setUser(null);
     setWatchLaterIds([]);
+    setWatchLaterVideos([]);
+    setLikedVideos([]);
+    setLikedVideoIds([]);
+    setSubscribedChannels([]);
+    setPlaylists([]);
+    setPlaylistContext(null);
     showToast('Signed out of YouTube');
   };
-
-  const isHomeMultiSection = activePage === 'home' && category === 'All';
 
   return (
     <div className="app-shell">
@@ -608,9 +883,6 @@ export default function App() {
         onToggleSidebar={handleToggleMenu}
       />
 
-      {/* Signature YouTube Red Top Line Loader */}
-      {(loading || loadingSections) && <div className="yt-top-line-loader" />}
-
       <div className="app-body">
         {/* Persistent Left Sidebar: Desktop Docked for Home/Search/WatchLater/Subscriptions/Liked; Drawer for Watch Page and Mobile */}
         {activePage !== 'watch' && (
@@ -624,10 +896,11 @@ export default function App() {
             watchLaterCount={watchLaterIds.length}
             likedCount={likedVideos.length}
             subscriptionsCount={subscribedChannels.length}
+            playlistsCount={playlists.length}
           />
         )}
 
-        {/* Overlay Drawer for Watch Page (or mobile toggle) - Solves "three bars not working" */}
+        {/* Overlay Drawer for Watch Page and mobile toggle */}
         <Sidebar
           isOpen={isDrawerOpen}
           isOverlay={true}
@@ -639,10 +912,12 @@ export default function App() {
           watchLaterCount={watchLaterIds.length}
           likedCount={likedVideos.length}
           subscriptionsCount={subscribedChannels.length}
+          playlistsCount={playlists.length}
         />
 
-        {/* Main Content Area: Maximum Space Utilization */}
+        {/* Main Content Area */}
         <main className={`main-content ${activePage === 'watch' ? 'watch-mode' : ''}`}>
+          {/* HOME PAGE: Clean unified video feed without dividing section titles */}
           {activePage === 'home' && (
             <>
               {/* Category Bar */}
@@ -651,242 +926,39 @@ export default function App() {
                 onSelectCategory={handleSelectCategory}
               />
 
-              {/* ALL SECTIONS ON HOME PAGE (Trending, Recent, Shorts, Music, Gaming, Tech, Feed) */}
-              {isHomeMultiSection ? (
-                <>
-                  {/* 1. TRENDING NOW SECTION */}
-                  {homeSections?.trending && homeSections.trending.length > 0 && (
-                    <section className="home-section">
-                      <div className="section-header">
-                        <div className="section-title-wrapper">
-                          <FlameIcon size={22} style={{ color: '#ff0000' }} />
-                          <h2 className="section-title">Trending Now</h2>
-                        </div>
-                        <button
-                          className="section-more-btn"
-                          onClick={() => handleSelectCategory('Trending')}
-                        >
-                          View all &rarr;
-                        </button>
-                      </div>
-                      <div className="videos-grid">
-                        {homeSections.trending.map((video, idx) => (
-                          <VideoCard
-                            key={`trending-${video.videoId || video._id}-${idx}`}
-                            video={video}
-                            onSelectVideo={handleSelectVideo}
-                            isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                            onToggleWatchLater={handleToggleWatchLater}
-                            onDownload={handleDownload}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* 2. RECENTLY UPLOADED SECTION */}
-                  {homeSections?.recent && homeSections.recent.length > 0 && (
-                    <section className="home-section">
-                      <div className="section-header">
-                        <div className="section-title-wrapper">
-                          <ClockIcon size={22} style={{ color: '#3ea6ff' }} />
-                          <h2 className="section-title">Recently Uploaded</h2>
-                        </div>
-                        <button
-                          className="section-more-btn"
-                          onClick={() => handleSelectCategory('Recent')}
-                        >
-                          View all &rarr;
-                        </button>
-                      </div>
-                      <div className="videos-grid">
-                        {homeSections.recent.map((video, idx) => (
-                          <VideoCard
-                            key={`recent-${video.videoId || video._id}-${idx}`}
-                            video={video}
-                            onSelectVideo={handleSelectVideo}
-                            isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                            onToggleWatchLater={handleToggleWatchLater}
-                            onDownload={handleDownload}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* 3. YOUTUBE SHORTS SECTION */}
-                  {homeSections?.shorts && homeSections.shorts.length > 0 && (
-                    <section className="home-section">
-                      <div className="section-header">
-                        <div className="section-title-wrapper">
-                          <ShortsIcon size={22} />
-                          <h2 className="section-title">Shorts</h2>
-                        </div>
-                      </div>
-                      <div className="shorts-shelf">
-                        {homeSections.shorts.map((video, idx) => (
-                          <ShortsCard
-                            key={`short-${video.videoId || video._id}-${idx}`}
-                            video={video}
-                            onSelectVideo={handleSelectVideo}
-                            isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                            onToggleWatchLater={handleToggleWatchLater}
-                            onDownload={handleDownload}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* 4. TRENDING MUSIC SECTION */}
-                  {homeSections?.music && homeSections.music.length > 0 && (
-                    <section className="home-section">
-                      <div className="section-header">
-                        <div className="section-title-wrapper">
-                          <MusicIcon size={22} style={{ color: '#ff4444' }} />
-                          <h2 className="section-title">Trending Music</h2>
-                        </div>
-                        <button
-                          className="section-more-btn"
-                          onClick={() => handleSelectCategory('Music')}
-                        >
-                          Explore Music &rarr;
-                        </button>
-                      </div>
-                      <div className="videos-grid">
-                        {homeSections.music.map((video, idx) => (
-                          <VideoCard
-                            key={`music-${video.videoId || video._id}-${idx}`}
-                            video={video}
-                            onSelectVideo={handleSelectVideo}
-                            isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                            onToggleWatchLater={handleToggleWatchLater}
-                            onDownload={handleDownload}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* 5. GAMING HIGHLIGHTS SECTION */}
-                  {homeSections?.gaming && homeSections.gaming.length > 0 && (
-                    <section className="home-section">
-                      <div className="section-header">
-                        <div className="section-title-wrapper">
-                          <GamepadIcon size={22} style={{ color: '#3ea6ff' }} />
-                          <h2 className="section-title">Gaming Highlights</h2>
-                        </div>
-                        <button
-                          className="section-more-btn"
-                          onClick={() => handleSelectCategory('Gaming')}
-                        >
-                          Explore Gaming &rarr;
-                        </button>
-                      </div>
-                      <div className="videos-grid">
-                        {homeSections.gaming.map((video, idx) => (
-                          <VideoCard
-                            key={`gaming-${video.videoId || video._id}-${idx}`}
-                            video={video}
-                            onSelectVideo={handleSelectVideo}
-                            isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                            onToggleWatchLater={handleToggleWatchLater}
-                            onDownload={handleDownload}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* 6. TECH & DEVELOPMENT SECTION */}
-                  {homeSections?.tech && homeSections.tech.length > 0 && (
-                    <section className="home-section">
-                      <div className="section-header">
-                        <div className="section-title-wrapper">
-                          <CodeIcon size={22} style={{ color: '#2ba640' }} />
-                          <h2 className="section-title">Technology & Development</h2>
-                        </div>
-                        <button
-                          className="section-more-btn"
-                          onClick={() => handleSelectCategory('Tech')}
-                        >
-                          Explore Tech &rarr;
-                        </button>
-                      </div>
-                      <div className="videos-grid">
-                        {homeSections.tech.map((video, idx) => (
-                          <VideoCard
-                            key={`tech-${video.videoId || video._id}-${idx}`}
-                            video={video}
-                            onSelectVideo={handleSelectVideo}
-                            isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                            onToggleWatchLater={handleToggleWatchLater}
-                            onDownload={handleDownload}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* 7. CONTINUOUS FEED WITH SCROLL-TO-LOAD */}
-                  <section className="home-section">
-                    <div className="section-header">
-                      <div className="section-title-wrapper">
-                        <FlameIcon size={22} style={{ color: '#f57c00' }} />
-                        <h2 className="section-title">Explore More Videos</h2>
-                      </div>
-                    </div>
-                    <div className="videos-grid">
-                      {videos.map((video, idx) => (
-                        <VideoCard
-                          key={`feed-${video.videoId || video._id}-${idx}`}
-                          video={video}
-                          onSelectVideo={handleSelectVideo}
-                          isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                          onToggleWatchLater={handleToggleWatchLater}
-                          onDownload={handleDownload}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                </>
+              {videos.length === 0 && !loading ? (
+                <div className="empty-state">
+                  <h3 className="empty-state-title">No videos found</h3>
+                  <p className="empty-state-desc">
+                    Try selecting another category.
+                  </p>
+                  <button
+                    className="nav-btn primary"
+                    onClick={() => handleSelectCategory('All')}
+                  >
+                    Reset to All
+                  </button>
+                </div>
               ) : (
-                /* SPECIFIC CATEGORY FILTER VIEW */
-                videos.length === 0 && !loading ? (
-                  <div className="empty-state">
-                    <h3 className="empty-state-title">No videos found</h3>
-                    <p className="empty-state-desc">
-                      Try selecting another category.
-                    </p>
-                    <button
-                      className="nav-btn primary"
-                      onClick={() => handleSelectCategory('All')}
-                    >
-                      Reset to All
-                    </button>
-                  </div>
-                ) : (
-                  <div className="videos-grid">
-                    {videos.map((video, idx) => (
-                      <VideoCard
-                        key={`cat-${category}-${video.videoId || video._id}-${idx}`}
-                        video={video}
-                        onSelectVideo={handleSelectVideo}
-                        isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                        onToggleWatchLater={handleToggleWatchLater}
-                        onDownload={handleDownload}
-                      />
-                    ))}
-                  </div>
-                )
+                <div className="videos-grid">
+                  {videos.map((video, idx) => (
+                    <VideoCard
+                      key={`feed-${video.videoId || video._id}-${idx}`}
+                      video={video}
+                      onSelectVideo={handleSelectVideo}
+                      isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
+                      onToggleWatchLater={handleToggleWatchLater}
+                    />
+                  ))}
+                </div>
               )}
 
               {/* Infinite Scroll Sentinel */}
               <div ref={sentinelRef} className="scroll-sentinel">
-                {(loading || loadingSections) && (
+                {loading && (
                   <div className="loading-indicator">
                     <div className="spinner"></div>
-                    <span>Loading more content...</span>
+                    <span>Loading more videos...</span>
                   </div>
                 )}
                 {!hasMore && videos.length > 0 && (
@@ -908,28 +980,63 @@ export default function App() {
               onSelectVideo={handleSelectVideo}
               watchLaterIds={watchLaterIds}
               onToggleWatchLater={handleToggleWatchLater}
-              onDownload={handleDownload}
+              onOpenSaveToPlaylist={(vid) => {
+                if (requireAuth('save videos to playlists')) {
+                  setSaveToPlaylistTarget(vid);
+                }
+              }}
               sentinelRef={sentinelRef}
             />
           )}
 
           {/* DEDICATED WATCH PAGE */}
-          {activePage === 'watch' && selectedVideo && (
-            <VideoPlayer
-              video={selectedVideo}
-              relatedVideos={relatedVideos}
-              onSelectVideo={handleSelectVideo}
-              isWatchLater={watchLaterIds.includes(selectedVideo.videoId || selectedVideo._id)}
-              onToggleWatchLater={handleToggleWatchLater}
-              onDownload={handleDownload}
-              onNotify={showToast}
-              isLiked={likedVideoIds.includes(selectedVideo.videoId || selectedVideo._id)}
-              onToggleLike={handleToggleLike}
-              isSubscribed={subscribedChannels.some(
-                (c) => c.channelName.toLowerCase() === (selectedVideo.channelName || '').toLowerCase()
-              )}
-              onToggleSubscribe={handleToggleSubscribe}
-            />
+          {activePage === 'watch' && (
+            selectedVideo ? (
+              <VideoPlayer
+                video={selectedVideo}
+                relatedVideos={relatedVideos}
+                onSelectVideo={handleSelectVideo}
+                isWatchLater={watchLaterIds.includes(
+                  selectedVideo.videoId || selectedVideo._id
+                )}
+                onToggleWatchLater={handleToggleWatchLater}
+                onNotify={showToast}
+                isLiked={likedVideoIds.includes(
+                  selectedVideo.videoId || selectedVideo._id
+                )}
+                onToggleLike={handleToggleLike}
+                isSubscribed={subscribedChannels.some(
+                  (c) =>
+                    c.channelName.toLowerCase() ===
+                    (selectedVideo.channelName || '').toLowerCase()
+                )}
+                onToggleSubscribe={handleToggleSubscribe}
+                playlistContext={playlistContext}
+                onOpenSaveToPlaylist={(vid) => {
+                  if (requireAuth('save videos to playlists')) {
+                    setSaveToPlaylistTarget(vid);
+                  }
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: '60vh',
+                  gap: '16px',
+                  color: '#aaa',
+                }}
+              >
+                <div
+                  className="spinner"
+                  style={{ width: '40px', height: '40px', borderWidth: '3px' }}
+                ></div>
+                <span>Loading video player...</span>
+              </div>
+            )
           )}
 
           {/* DEDICATED WATCH LATER PAGE */}
@@ -937,6 +1044,7 @@ export default function App() {
             <WatchLaterPage
               videos={watchLaterVideos}
               onSelectVideo={handleSelectVideo}
+              onPlayPlaylist={handlePlayPlaylist}
               onRemoveVideo={handleRemoveWatchLater}
               onClearAll={handleClearWatchLater}
               onExplore={() => handleNavigate('home')}
@@ -951,7 +1059,6 @@ export default function App() {
               onSelectVideo={handleSelectVideo}
               watchLaterIds={watchLaterIds}
               onToggleWatchLater={handleToggleWatchLater}
-              onDownload={handleDownload}
               onExplore={() => handleNavigate('home')}
             />
           )}
@@ -961,16 +1068,43 @@ export default function App() {
             <LikedVideosPage
               videos={likedVideos}
               onSelectVideo={handleSelectVideo}
+              onPlayPlaylist={handlePlayPlaylist}
               onRemoveLike={handleRemoveLike}
               onClearAll={handleClearLikedVideos}
               onExplore={() => handleNavigate('home')}
               watchLaterIds={watchLaterIds}
               onToggleWatchLater={handleToggleWatchLater}
-              onDownload={handleDownload}
+            />
+          )}
+
+          {/* DEDICATED PLAYLISTS PAGE */}
+          {activePage === 'playlists' && (
+            <PlaylistsPage
+              playlists={playlists}
+              onCreatePlaylist={handleCreatePlaylist}
+              onDeletePlaylist={handleDeletePlaylist}
+              onRemoveVideoFromPlaylist={handleRemoveVideoFromPlaylist}
+              onSelectVideo={handleSelectVideo}
+              onPlayPlaylist={handlePlayPlaylist}
+              onExplore={() => handleNavigate('home')}
+              watchLaterIds={watchLaterIds}
+              onToggleWatchLater={handleToggleWatchLater}
             />
           )}
         </main>
       </div>
+
+      {/* Save to Playlist Modal */}
+      <SaveToPlaylistModal
+        isOpen={Boolean(saveToPlaylistTarget)}
+        onClose={() => setSaveToPlaylistTarget(null)}
+        video={saveToPlaylistTarget}
+        playlists={playlists}
+        onCreatePlaylist={async (title, desc, vid) => {
+          await handleCreatePlaylist(title, desc, vid);
+        }}
+        onToggleVideoInPlaylist={handleToggleVideoInPlaylist}
+      />
 
       {/* Auth Modal */}
       <AuthModal

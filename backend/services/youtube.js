@@ -447,8 +447,8 @@ export async function fetchYouTubeVideos({ query = '', category = 'All', page = 
 export async function fetchYouTubeVideoById(videoId) {
   let video = videoMap.get(videoId);
 
-  // If not in cache, try fetching
-  if (!video) {
+  // If not in cache or if it only has the short search snippet, fetch full details with complete description
+  if (!video || !video.hasFullDetails) {
     try {
       let details = null;
       try {
@@ -461,30 +461,34 @@ export async function fetchYouTubeVideoById(videoId) {
       }
 
       if (details) {
-        const viewsCount = details.views || 100000;
+        const viewsCount = details.views || (video && video.views) || 100000;
         const estimatedLikes = Math.max(240, Math.floor(viewsCount * 0.052));
         const estimatedSubs = Math.max(120000, Math.floor(viewsCount * 1.8));
 
         video = {
           _id: details.videoId || videoId,
           videoId: details.videoId || videoId,
-          title: details.title || 'YouTube Video',
-          description: details.description || '',
+          title: details.title || (video && video.title) || 'YouTube Video',
+          description: details.description || (video && video.description) || '',
           thumbnailUrl:
             details.image ||
             details.thumbnail ||
+            (video && video.thumbnailUrl) ||
             `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-          duration: details.timestamp || '0:00',
-          channelName: details.author?.name || 'YouTube Channel',
-          channelAvatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(
-            details.author?.name || 'YT'
-          )}&background=cc0000&color=fff&size=100`,
+          duration: details.timestamp || (video && video.duration) || '0:00',
+          channelName: details.author?.name || (video && video.channelName) || 'YouTube Channel',
+          channelAvatar:
+            (video && video.channelAvatar) ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(
+              details.author?.name || 'YT'
+            )}&background=cc0000&color=fff&size=100`,
           subscriberCount: `${formatCompactNumber(estimatedSubs)} subscribers`,
           likes: `${formatCompactNumber(estimatedLikes)}`,
           views: `${formatCompactNumber(viewsCount)} views`,
-          uploadDate: details.ago || details.uploadDate || 'Recently',
+          uploadDate: details.ago || details.uploadDate || (video && video.uploadDate) || 'Recently',
           videoUrl: details.url || `https://www.youtube.com/watch?v=${videoId}`,
           tags: details.genre ? [details.genre] : ['YouTube', 'Video'],
+          hasFullDetails: true,
         };
 
         videoMap.set(videoId, video);
@@ -500,15 +504,15 @@ export async function fetchYouTubeVideoById(videoId) {
       _id: videoId,
       videoId: videoId,
       title: 'YouTube Video',
-      description: 'Enjoy this video ad-free on YouTube Clone.',
+      description: '',
       thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
       duration: '0:00',
       channelName: 'YouTube Creator',
       channelAvatar: 'https://ui-avatars.com/api/?name=YT&background=cc0000&color=fff&size=100',
-      subscriberCount: '1.2M subscribers',
-      likes: '45K',
-      views: '890K views',
-      uploadDate: 'Recently',
+      subscriberCount: '',
+      likes: '',
+      views: '',
+      uploadDate: '',
       videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
       tags: ['YouTube'],
     };

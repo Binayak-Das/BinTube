@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import {
   HomeIcon,
   ClockIcon,
@@ -8,6 +9,7 @@ import {
   MenuIcon,
   SubscriptionsIcon,
   ThumbsUpIcon,
+  PlaylistIcon,
 } from './Icons.jsx';
 
 export default function Sidebar({
@@ -21,6 +23,7 @@ export default function Sidebar({
   watchLaterCount = 0,
   likedCount = 0,
   subscriptionsCount = 0,
+  playlistsCount = 0,
 }) {
   const categories = [
     { name: 'Music', label: 'Music' },
@@ -33,8 +36,12 @@ export default function Sidebar({
     { name: 'Podcasts', label: 'Podcasts' },
   ];
 
-  const handleItemClick = (action) => {
-    action();
+  const handleLinkClick = (e, action) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      if (isOverlay && onClose) onClose();
+      return;
+    }
+    if (action) action();
     if (isOverlay && onClose) {
       onClose();
     }
@@ -57,18 +64,30 @@ export default function Sidebar({
             <button className="nav-icon-btn" onClick={onClose} title="Close menu">
               <MenuIcon size={20} />
             </button>
-            <YouTubeLogo />
+            <Link
+              to="/"
+              onClick={(e) =>
+                handleLinkClick(e, () => {
+                  onSelectCategory('All');
+                  onNavigate('home');
+                })
+              }
+              title="YouTube Home"
+            >
+              <YouTubeLogo />
+            </Link>
           </div>
         )}
 
         {/* Primary Navigation */}
         <div className="sidebar-section">
-          <button
+          <Link
+            to="/"
             className={`sidebar-item ${
               activePage === 'home' && activeCategory === 'All' ? 'active' : ''
             }`}
-            onClick={() =>
-              handleItemClick(() => {
+            onClick={(e) =>
+              handleLinkClick(e, () => {
                 onSelectCategory('All');
                 onNavigate('home');
               })
@@ -76,14 +95,15 @@ export default function Sidebar({
           >
             <HomeIcon size={20} />
             <span>Home</span>
-          </button>
+          </Link>
 
-          <button
+          <Link
+            to="/?category=Trending"
             className={`sidebar-item ${
               activePage === 'home' && activeCategory === 'Trending' ? 'active' : ''
             }`}
-            onClick={() =>
-              handleItemClick(() => {
+            onClick={(e) =>
+              handleLinkClick(e, () => {
                 onSelectCategory('Trending');
                 onNavigate('home');
               })
@@ -91,24 +111,22 @@ export default function Sidebar({
           >
             <FlameIcon size={20} />
             <span>Trending</span>
-          </button>
+          </Link>
 
-          <button
+          <Link
+            to="/subscriptions"
             className={`sidebar-item ${
               activePage === 'subscriptions' ? 'active' : ''
             }`}
-            onClick={() =>
-              handleItemClick(() => {
+            onClick={(e) =>
+              handleLinkClick(e, () => {
                 onNavigate('subscriptions');
               })
             }
           >
             <SubscriptionsIcon size={20} />
             <span>Subscriptions</span>
-            {subscriptionsCount > 0 && (
-              <span className="sidebar-badge-neutral">{subscriptionsCount}</span>
-            )}
-          </button>
+          </Link>
         </div>
 
         <div className="sidebar-divider" />
@@ -116,39 +134,50 @@ export default function Sidebar({
         {/* You Section */}
         <div className="sidebar-section">
           <h4 className="sidebar-heading">You</h4>
-          <button
+          <Link
+            to="/liked"
             className={`sidebar-item ${
               activePage === 'liked' ? 'active' : ''
             }`}
-            onClick={() =>
-              handleItemClick(() => {
+            onClick={(e) =>
+              handleLinkClick(e, () => {
                 onNavigate('liked');
               })
             }
           >
             <ThumbsUpIcon size={19} filled={activePage === 'liked'} />
             <span>Liked videos</span>
-            {likedCount > 0 && (
-              <span className="sidebar-badge">{likedCount}</span>
-            )}
-          </button>
+          </Link>
 
-          <button
+          <Link
+            to="/watch-later"
             className={`sidebar-item ${
               activePage === 'watch-later' ? 'active' : ''
             }`}
-            onClick={() =>
-              handleItemClick(() => {
+            onClick={(e) =>
+              handleLinkClick(e, () => {
                 onNavigate('watch-later');
               })
             }
           >
             <ClockIcon size={20} />
             <span>Watch Later</span>
-            {watchLaterCount > 0 && (
-              <span className="sidebar-badge">{watchLaterCount}</span>
-            )}
-          </button>
+          </Link>
+
+          <Link
+            to="/playlists"
+            className={`sidebar-item ${
+              activePage === 'playlists' ? 'active' : ''
+            }`}
+            onClick={(e) =>
+              handleLinkClick(e, () => {
+                onNavigate('playlists');
+              })
+            }
+          >
+            <PlaylistIcon size={20} />
+            <span>Playlists</span>
+          </Link>
         </div>
 
         <div className="sidebar-divider" />
@@ -156,13 +185,14 @@ export default function Sidebar({
         <div className="sidebar-section">
           <h4 className="sidebar-heading">Explore</h4>
           {categories.map((cat) => (
-            <button
+            <Link
               key={cat.name}
+              to={`/?category=${encodeURIComponent(cat.name)}`}
               className={`sidebar-item ${
                 activePage === 'home' && activeCategory === cat.name ? 'active' : ''
               }`}
-              onClick={() =>
-                handleItemClick(() => {
+              onClick={(e) =>
+                handleLinkClick(e, () => {
                   onSelectCategory(cat.name);
                   onNavigate('home');
                 })
@@ -170,7 +200,7 @@ export default function Sidebar({
             >
               <PlayIcon size={16} />
               <span>{cat.label}</span>
-            </button>
+            </Link>
           ))}
         </div>
       </aside>

@@ -1,15 +1,32 @@
 import React from 'react';
-import { ClockIcon, DownloadIcon, CheckIcon } from './Icons.jsx';
+import { Link } from 'react-router-dom';
+import { ClockIcon, CheckIcon } from './Icons.jsx';
 
 export default function VideoCard({
   video,
   onSelectVideo,
   isWatchLater,
   onToggleWatchLater,
-  onDownload,
 }) {
+  const vId = video.videoId || video._id;
+
+  const handleClick = (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      return;
+    }
+    e.preventDefault();
+    if (onSelectVideo) {
+      onSelectVideo(video);
+    }
+  };
+
   return (
-    <article className="video-card" onClick={() => onSelectVideo(video)}>
+    <Link
+      to={`/watch?v=${encodeURIComponent(vId)}`}
+      state={{ video }}
+      className="video-card"
+      onClick={handleClick}
+    >
       {/* Thumbnail */}
       <div className="thumbnail-box">
         <img
@@ -21,20 +38,24 @@ export default function VideoCard({
         <span className="duration-badge">{video.duration}</span>
 
         {/* Hover quick action overlays */}
-        <div className="card-quick-actions" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="card-quick-actions"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
           <button
+            type="button"
             className={`quick-action-btn ${isWatchLater ? 'active' : ''}`}
-            onClick={() => onToggleWatchLater(video)}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleWatchLater(video);
+            }}
             title={isWatchLater ? 'Remove from Watch Later' : 'Watch Later'}
           >
             <ClockIcon size={16} />
-          </button>
-          <button
-            className="quick-action-btn"
-            onClick={() => onDownload(video)}
-            title="Download Video"
-          >
-            <DownloadIcon size={16} />
           </button>
         </div>
       </div>
@@ -60,6 +81,6 @@ export default function VideoCard({
           </div>
         </div>
       </div>
-    </article>
+    </Link>
   );
 }

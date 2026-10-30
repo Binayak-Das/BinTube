@@ -8,6 +8,9 @@ import User from './models/User.js';
 import authRoutes from './routes/auth.js';
 import videoRoutes from './routes/videos.js';
 import watchLaterRoutes from './routes/watchLater.js';
+import likedVideosRoutes from './routes/likedVideos.js';
+import subscriptionsRoutes from './routes/subscriptions.js';
+import playlistsRoutes from './routes/playlists.js';
 
 dotenv.config();
 
@@ -32,8 +35,11 @@ async function connectDB() {
   await dbPromise;
 }
 
-// Auto-connect to DB before handling requests
+// Auto-connect to DB before handling requests (skip for health check and suggestions)
 app.use(async (req, res, next) => {
+  if (req.path === '/api/health' || req.path.includes('/suggestions')) {
+    return next();
+  }
   try {
     await connectDB();
     next();
@@ -47,6 +53,9 @@ app.use(async (req, res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/watch-later', watchLaterRoutes);
+app.use('/api/liked-videos', likedVideosRoutes);
+app.use('/api/subscriptions', subscriptionsRoutes);
+app.use('/api/playlists', playlistsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -68,8 +77,17 @@ async function ensureDemoUser() {
         email: 'demo@bintube.com',
         password: hashedPassword,
         watchLater: [],
+        likedVideos: [],
+        subscribedChannels: [],
+        playlists: [],
       });
       console.log('Demo account ready: demo@bintube.com / password123');
+    } else {
+      let needsSave = false;
+      if (!demoUser.likedVideos) { demoUser.likedVideos = []; needsSave = true; }
+      if (!demoUser.subscribedChannels) { demoUser.subscribedChannels = []; needsSave = true; }
+      if (!demoUser.playlists) { demoUser.playlists = []; needsSave = true; }
+      if (needsSave) await demoUser.save();
     }
   } catch (err) {
     console.error('Demo user check error:', err);
@@ -78,15 +96,12 @@ async function ensureDemoUser() {
 
 // Start standalone HTTP server locally (when not running in Vercel serverless)
 if (!process.env.VERCEL) {
-  connectDB()
-    .then(() => {
-      app.listen(PORT, '0.0.0.0', () => {
-        console.log(`YouTube Clone server running on http://127.0.0.1:${PORT}`);
-      });
-    })
-    .catch((err) => {
-      console.error('MongoDB initial connection error:', err.message);
-    });
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`YouTube Clone server running on http://127.0.0.1:${PORT}`);
+  });
+  connectDB().catch((err) => {
+    console.error('MongoDB initial connection error:', err.message);
+  });
 }
 
 export default app;

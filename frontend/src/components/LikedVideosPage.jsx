@@ -1,30 +1,49 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import {
   ThumbsUpIcon,
   PlayIcon,
   TrashIcon,
   ClockIcon,
-  DownloadIcon,
   CheckIcon,
 } from './Icons.jsx';
 
 export default function LikedVideosPage({
   videos = [],
   onSelectVideo,
+  onPlayPlaylist,
   onRemoveLike,
   onClearAll,
   onExplore,
   watchLaterIds = [],
   onToggleWatchLater,
-  onDownload,
 }) {
   const hasVideos = videos && videos.length > 0;
   const leadVideo = hasVideos ? videos[0] : null;
+  const leadVideoId = leadVideo?.videoId || leadVideo?._id;
 
-  const handlePlayAll = () => {
-    if (hasVideos) {
-      onSelectVideo(videos[0]);
+  const handlePlayVideoAtIndex = (index) => {
+    if (!videos || !videos[index]) return;
+    if (onPlayPlaylist) {
+      onPlayPlaylist(videos, index, 'Liked videos', 'liked');
+    } else if (onSelectVideo) {
+      onSelectVideo(videos[index]);
     }
+  };
+
+  const handlePlayAllClick = (e) => {
+    e.preventDefault();
+    if (hasVideos) {
+      handlePlayVideoAtIndex(0);
+    }
+  };
+
+  const handleLinkClick = (e, video, index) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      return;
+    }
+    e.preventDefault();
+    handlePlayVideoAtIndex(index);
   };
 
   return (
@@ -44,34 +63,38 @@ export default function LikedVideosPage({
               </div>
             </div>
 
-            <div className="liked-playlist-meta">
-              <h1 className="liked-playlist-title">Liked videos</h1>
-              <p className="liked-owner-text">Your Liked Playlist</p>
-              <div className="liked-stats-bar">
-                <span>{videos.length} {videos.length === 1 ? 'video' : 'videos'}</span>
-                <span>•</span>
-                <span>Updated today</span>
+            <div className="liked-playlist-details">
+              <div className="liked-playlist-meta">
+                <h1 className="liked-playlist-title">Liked videos</h1>
+                <p className="liked-owner-text">Your Liked Playlist</p>
+                <div className="liked-stats-bar">
+                  <span>{videos.length} {videos.length === 1 ? 'video' : 'videos'}</span>
+                  <span>•</span>
+                  <span>Updated today</span>
+                </div>
               </div>
-            </div>
 
-            <div className="liked-playlist-actions">
-              <button
-                className="liked-play-all-btn"
-                onClick={handlePlayAll}
-                title="Play all liked videos"
-              >
-                <PlayIcon size={18} />
-                <span>Play all</span>
-              </button>
+              <div className="liked-playlist-actions">
+                <button
+                  type="button"
+                  className="liked-play-all-btn"
+                  onClick={handlePlayAllClick}
+                  title="Play all liked videos"
+                >
+                  <PlayIcon size={18} />
+                  <span>Play all</span>
+                </button>
 
-              <button
-                className="liked-clear-btn"
-                onClick={onClearAll}
-                title="Clear all liked videos"
-              >
-                <TrashIcon size={16} />
-                <span>Clear playlist</span>
-              </button>
+                <button
+                  type="button"
+                  className="liked-clear-btn"
+                  onClick={onClearAll}
+                  title="Clear all liked videos"
+                >
+                  <TrashIcon size={16} />
+                  <span>Clear playlist</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -96,7 +119,7 @@ export default function LikedVideosPage({
                     {/* Thumbnail */}
                     <div
                       className="liked-row-thumb-box"
-                      onClick={() => onSelectVideo(video)}
+                      onClick={(e) => handleLinkClick(e, video, index)}
                     >
                       <img
                         src={video.thumbnailUrl}
@@ -113,7 +136,7 @@ export default function LikedVideosPage({
                     {/* Info */}
                     <div
                       className="liked-row-info"
-                      onClick={() => onSelectVideo(video)}
+                      onClick={(e) => handleLinkClick(e, video, index)}
                     >
                       <h3 className="liked-row-title" title={video.title}>
                         {video.title}
@@ -133,6 +156,7 @@ export default function LikedVideosPage({
                     <div className="liked-row-actions">
                       {/* Unlike / Remove */}
                       <button
+                        type="button"
                         className="liked-row-btn active-like"
                         onClick={() => onRemoveLike(vId)}
                         title="Remove from Liked videos"
@@ -142,6 +166,7 @@ export default function LikedVideosPage({
 
                       {/* Watch Later */}
                       <button
+                        type="button"
                         className={`liked-row-btn ${isSavedToWatchLater ? 'active-wl' : ''}`}
                         onClick={() => onToggleWatchLater(video)}
                         title={
@@ -151,15 +176,6 @@ export default function LikedVideosPage({
                         }
                       >
                         <ClockIcon size={16} />
-                      </button>
-
-                      {/* Download */}
-                      <button
-                        className="liked-row-btn"
-                        onClick={() => onDownload(video)}
-                        title="Download Video"
-                      >
-                        <DownloadIcon size={16} />
                       </button>
                     </div>
                   </div>
@@ -178,9 +194,9 @@ export default function LikedVideosPage({
           <p className="empty-liked-desc">
             Tap the thumbs up icon on any video you enjoy to add it to your Liked videos playlist.
           </p>
-          <button className="nav-btn primary" onClick={onExplore}>
+          <Link to="/" className="nav-btn primary" onClick={onExplore}>
             Explore Trending Videos
-          </button>
+          </Link>
         </div>
       )}
     </div>

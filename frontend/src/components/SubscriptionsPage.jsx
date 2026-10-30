@@ -1,47 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import VideoCard from './VideoCard.jsx';
-import { SubscriptionsIcon, CheckIcon, PlayIcon } from './Icons.jsx';
+import { SubscriptionsIcon, CheckIcon } from './Icons.jsx';
 import { apiUrl } from '../config/api.js';
-
-// Popular YouTube channels to recommend if subscriptions list is light
-const SUGGESTED_CHANNELS = [
-  {
-    channelName: 'MrBeast',
-    channelAvatar: 'https://ui-avatars.com/api/?name=MrBeast&background=00bfff&color=fff&size=100',
-    subscriberCount: '315M subscribers',
-    description: 'I want to make the world a better place before I die.',
-  },
-  {
-    channelName: 'Veritasium',
-    channelAvatar: 'https://ui-avatars.com/api/?name=Veritasium&background=000&color=fff&size=100',
-    subscriberCount: '16.2M subscribers',
-    description: 'An element of truth - videos about science, education, and anything interesting.',
-  },
-  {
-    channelName: 'Marques Brownlee',
-    channelAvatar: 'https://ui-avatars.com/api/?name=MKBHD&background=e00000&color=fff&size=100',
-    subscriberCount: '19.1M subscribers',
-    description: 'Quality tech videos | YouTuber | Geek | Consumer Electronics.',
-  },
-  {
-    channelName: 'Fireship',
-    channelAvatar: 'https://ui-avatars.com/api/?name=Fireship&background=ff5722&color=fff&size=100',
-    subscriberCount: '3.4M subscribers',
-    description: 'High-intensity code tutorials and tech news to help you ship apps faster.',
-  },
-  {
-    channelName: 'Kurzgesagt – In a Nutshell',
-    channelAvatar: 'https://ui-avatars.com/api/?name=Kurzgesagt&background=7b1fa2&color=fff&size=100',
-    subscriberCount: '22.8M subscribers',
-    description: 'Videos explaining things with optimistic nihilism. Science and philosophy.',
-  },
-  {
-    channelName: 'National Geographic',
-    channelAvatar: 'https://ui-avatars.com/api/?name=NatGeo&background=ffeb3b&color=000&size=100',
-    subscriberCount: '22.4M subscribers',
-    description: 'Inspiring people to care about the planet since 1888.',
-  },
-];
 
 export default function SubscriptionsPage({
   subscribedChannels = [],
@@ -49,47 +9,171 @@ export default function SubscriptionsPage({
   onSelectVideo,
   watchLaterIds = [],
   onToggleWatchLater,
-  onDownload,
   onExplore,
 }) {
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'manage'
   const [activeChannelFilter, setActiveChannelFilter] = useState('All');
   const [subVideos, setSubVideos] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const sentinelRef = useRef(null);
 
-  // Fetch videos for the subscribed channels
-  useEffect(() => {
-    let isMounted = true;
-    const fetchSubscribedVideos = async () => {
-      if (subscribedChannels.length === 0) {
-        setSubVideos([]);
-        return;
-      }
+  // Helper to fetch and interleave videos across all subscribed creators
+  const fetchMixedCreatorVideos = async (channels, pageNum) => {
+    if (!channels || channels.length === 0) return [];
 
-      setLoading(true);
+    // Query across up to 6 creators per round
+    const targetChannels = channels.slice(0, 6);
+    const fetchPromises = targetChannels.map(async (ch) => {
       try {
-        const queryTerm =
-          activeChannelFilter !== 'All'
-            ? activeChannelFilter
-            : subscribedChannels.slice(0, 3).map((c) => c.channelName).join(' ');
-
-        const res = await fetch(apiUrl(`/api/videos?q=${encodeURIComponent(queryTerm)}&limit=18`));
-        if (res.ok && isMounted) {
+        const res = await fetch(
+          apiUrl(`/api/videos?q=${encodeURIComponent(ch.channelName)}&page=${pageNum}&limit=6`)
+        );
+        if (res.ok) {
           const data = await res.json();
-          setSubVideos(data.videos || []);
+          return data.videos || [];
         }
       } catch (err) {
-        console.error('Failed to load subscription videos:', err);
+        console.warn(`Error fetching videos for channel ${ch.channelName}:`, err);
+      }
+      return [];
+    });
+
+    const results = await Promise.all(fetchPromises);
+
+    // Interleave/mix content across all creators
+    const mixed = [];
+    const maxLen = Math.max(...results.map((r) => r.length), 0);
+    for (let i = 0; i < maxLen; i++) {
+      for (let c = 0; c < results.length; c++) {
+        if (results[c][i]) {
+          mixed.push(results[c][i]);
+        }
+      }
+    }
+    return mixed;
+  };
+
+  // Reset & load page 1 whenever subscribedChannels or activeChannelFilter changes
+  useEffect(() => {
+    let isMounted = true;
+    setPage(1);
+    setHasMore(true);
+
+    if (subscribedChannels.length === 0) {
+      setSubVideos([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const loadInitialFeed = async () => {
+      try {
+        let initialList = [];
+        if (activeChannelFilter === 'All') {
+          // Mix content of all subscribed creators
+          initialList = await fetchMixedCreatorVideos(subscribedChannels, 1);
+        } else {
+          // Single creator feed
+          const res = await fetch(
+            apiUrl(`/api/videos?q=${encodeURIComponent(activeChannelFilter)}&page=1&limit=18`)
+          );
+          if (res.ok) {
+            const data = await res.json();
+            initialList = data.videos || [];
+          }
+        }
+
+        if (isMounted) {
+          // Deduplicate
+          const seen = new Set();
+          const unique = initialList.filter((v) => {
+            const id = v.videoId || v._id;
+            if (!id || seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+          setSubVideos(unique);
+          setHasMore(unique.length >= 6);
+        }
+      } catch (err) {
+        console.error('Failed to load initial subscription videos:', err);
       } finally {
         if (isMounted) setLoading(false);
       }
     };
 
-    fetchSubscribedVideos();
+    loadInitialFeed();
     return () => {
       isMounted = false;
     };
   }, [subscribedChannels, activeChannelFilter]);
+
+  // Load more content on page scroll
+  const loadMoreVideos = useCallback(async () => {
+    if (loading || loadingMore || !hasMore || subscribedChannels.length === 0) return;
+
+    setLoadingMore(true);
+    const nextPage = page + 1;
+    try {
+      let incoming = [];
+      if (activeChannelFilter === 'All') {
+        // Fetch next page mixed across all creators
+        incoming = await fetchMixedCreatorVideos(subscribedChannels, nextPage);
+      } else {
+        const res = await fetch(
+          apiUrl(`/api/videos?q=${encodeURIComponent(activeChannelFilter)}&page=${nextPage}&limit=12`)
+        );
+        if (res.ok) {
+          const data = await res.json();
+          incoming = data.videos || [];
+        }
+      }
+
+      setSubVideos((prev) => {
+        const seen = new Set(prev.map((v) => v.videoId || v._id));
+        const filtered = incoming.filter((v) => {
+          const id = v.videoId || v._id;
+          if (!id || seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+
+        if (filtered.length === 0) {
+          setHasMore(false);
+          return prev;
+        }
+
+        setPage(nextPage);
+        return [...prev, ...filtered];
+      });
+    } catch (err) {
+      console.warn('Error loading more subscription videos:', err);
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loading, loadingMore, hasMore, subscribedChannels, activeChannelFilter, page]);
+
+  // Infinite Scroll IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          loadMoreVideos();
+        }
+      },
+      { rootMargin: '300px' }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMoreVideos]);
 
   const isChannelSubscribed = (name) => {
     return subscribedChannels.some((c) => c.channelName.toLowerCase() === name.toLowerCase());
@@ -184,9 +268,11 @@ export default function SubscriptionsPage({
                     <h3 className="manage-channel-title">
                       {channel.channelName} <CheckIcon size={14} />
                     </h3>
-                    <p className="manage-channel-subs">
-                      {channel.subscriberCount || '1.2M subscribers'}
-                    </p>
+                    {channel.subscriberCount && (
+                      <p className="manage-channel-subs">
+                        {channel.subscriberCount}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <button
@@ -202,7 +288,7 @@ export default function SubscriptionsPage({
         </div>
       )}
 
-      {/* VIEW MODE: LATEST VIDEOS GRID */}
+      {/* VIEW MODE: LATEST VIDEOS GRID WITH INFINITE SCROLL */}
       {viewMode === 'grid' && subscribedChannels.length > 0 && (
         <div className="sub-videos-section">
           {loading ? (
@@ -215,23 +301,37 @@ export default function SubscriptionsPage({
               <p>No recent uploads from {activeChannelFilter === 'All' ? 'these channels' : activeChannelFilter}.</p>
             </div>
           ) : (
-            <div className="videos-grid">
-              {subVideos.map((video, idx) => (
-                <VideoCard
-                  key={`sub-${video.videoId || video._id}-${idx}`}
-                  video={video}
-                  onSelectVideo={onSelectVideo}
-                  isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                  onToggleWatchLater={onToggleWatchLater}
-                  onDownload={onDownload}
-                />
-              ))}
-            </div>
+            <>
+              <div className="videos-grid">
+                {subVideos.map((video, idx) => (
+                  <VideoCard
+                    key={`sub-${video.videoId || video._id}-${idx}`}
+                    video={video}
+                    onSelectVideo={onSelectVideo}
+                    isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
+                    onToggleWatchLater={onToggleWatchLater}
+                  />
+                ))}
+              </div>
+
+              {/* Infinite Scroll Sentinel */}
+              <div ref={sentinelRef} className="scroll-sentinel">
+                {loadingMore && (
+                  <div className="loading-indicator">
+                    <div className="spinner"></div>
+                    <span>Loading more from subscriptions...</span>
+                  </div>
+                )}
+                {!hasMore && subVideos.length > 0 && (
+                  <span className="end-catalog-msg">You're all caught up with your subscriptions.</span>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}
 
-      {/* EMPTY STATE: ZERO SUBSCRIPTIONS -> SUGGESTED CHANNELS */}
+      {/* EMPTY STATE: ZERO SUBSCRIPTIONS */}
       {subscribedChannels.length === 0 && (
         <div className="empty-subscriptions-box">
           <div className="empty-sub-icon">
@@ -239,37 +339,17 @@ export default function SubscriptionsPage({
           </div>
           <h2 className="empty-sub-title">Don't miss new videos</h2>
           <p className="empty-sub-desc">
-            Sign in or subscribe to your favorite channels to get the latest videos right here.
+            Subscribe to your favorite channels to get their latest videos right here.
           </p>
-
-          <div className="suggested-channels-wrapper">
-            <h3 className="suggested-heading">Recommended Channels</h3>
-            <div className="suggested-grid">
-              {SUGGESTED_CHANNELS.map((ch) => {
-                const subbed = isChannelSubscribed(ch.channelName);
-                return (
-                  <div key={ch.channelName} className="suggested-channel-card">
-                    <img
-                      src={ch.channelAvatar}
-                      alt={ch.channelName}
-                      className="suggested-avatar"
-                    />
-                    <h4 className="suggested-name">
-                      {ch.channelName} <CheckIcon size={13} />
-                    </h4>
-                    <span className="suggested-subcount">{ch.subscriberCount}</span>
-                    <p className="suggested-desc">{ch.description}</p>
-                    <button
-                      className={`subscribe-pill-btn ${subbed ? 'subbed' : ''}`}
-                      onClick={() => onToggleSubscribe(ch)}
-                    >
-                      {subbed ? 'Subscribed' : 'Subscribe'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          {onExplore && (
+            <button
+              type="button"
+              className="empty-state-action-btn"
+              onClick={onExplore}
+            >
+              Explore videos
+            </button>
+          )}
         </div>
       )}
     </div>

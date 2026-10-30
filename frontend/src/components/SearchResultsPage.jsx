@@ -1,5 +1,16 @@
-import React from 'react';
-import { ClockIcon, DownloadIcon, CheckIcon } from './Icons.jsx';
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { ClockIcon, CheckIcon, MoreVerticalIcon, PlaylistIcon } from './Icons.jsx';
+
+const SEARCH_FILTERS = [
+  'All',
+  'Shorts',
+  'Unwatched',
+  'Watched',
+  'Videos',
+  'Recently uploaded',
+  'Live',
+];
 
 export default function SearchResultsPage({
   searchQuery,
@@ -9,18 +20,34 @@ export default function SearchResultsPage({
   onSelectVideo,
   watchLaterIds = [],
   onToggleWatchLater,
-  onDownload,
+  onOpenSaveToPlaylist,
   sentinelRef,
 }) {
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [activeFilter, setActiveFilter] = useState('All');
+
+  useEffect(() => {
+    const handleGlobalClick = () => setOpenMenuId(null);
+    window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, []);
   return (
     <div className="search-results-page">
-      <div className="search-results-header">
-        <h2 className="search-query-title">
-          Search results for: <span className="highlighted-query">"{searchQuery}"</span>
-        </h2>
-        <span className="results-count-badge">{videos.length} videos found</span>
+      {/* YouTube Filter Chips Bar (Image 1) */}
+      <div className="search-filter-chips-bar">
+        <div className="search-chips-list">
+          {SEARCH_FILTERS.map((filter) => (
+            <button
+              key={filter}
+              type="button"
+              className={`search-chip-btn ${activeFilter === filter ? 'active' : ''}`}
+              onClick={() => setActiveFilter(filter)}
+            >
+              {filter}
+            </button>
+          ))}
+        </div>
       </div>
-
       {videos.length === 0 && loading ? (
         <div className="search-skeleton-list">
           {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -52,11 +79,23 @@ export default function SearchResultsPage({
             const vId = video.videoId || video._id;
             const isWatchLater = watchLaterIds.includes(vId);
 
+            const handleCardClick = (e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+                return;
+              }
+              e.preventDefault();
+              if (onSelectVideo) {
+                onSelectVideo(video);
+              }
+            };
+
             return (
-              <article
+              <Link
                 key={`search-${vId}-${index}`}
+                to={`/watch?v=${encodeURIComponent(vId)}`}
+                state={{ video }}
                 className="search-video-row"
-                onClick={() => onSelectVideo(video)}
+                onClick={handleCardClick}
               >
                 {/* Left: Thumbnail */}
                 <div className="search-thumb-box">
@@ -70,30 +109,87 @@ export default function SearchResultsPage({
 
                   <div
                     className="card-quick-actions"
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
                   >
                     <button
+                      type="button"
                       className={`quick-action-btn ${isWatchLater ? 'active' : ''}`}
-                      onClick={() => onToggleWatchLater(video)}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onToggleWatchLater(video);
+                      }}
                       title={isWatchLater ? 'Remove from Watch Later' : 'Watch Later'}
                     >
                       <ClockIcon size={16} />
-                    </button>
-                    <button
-                      className="quick-action-btn"
-                      onClick={() => onDownload(video)}
-                      title="Download Video"
-                    >
-                      <DownloadIcon size={16} />
                     </button>
                   </div>
                 </div>
 
                 {/* Right: Info */}
                 <div className="search-row-info">
-                  <h3 className="search-row-title" title={video.title}>
-                    {video.title}
-                  </h3>
+                  <div className="search-row-title-bar">
+                    <h3 className="search-row-title" title={video.title}>
+                      {video.title}
+                    </h3>
+                    <div className="search-more-menu-container">
+                      <button
+                        type="button"
+                        className={`search-row-more-btn ${openMenuId === vId ? 'menu-active' : ''}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setOpenMenuId(openMenuId === vId ? null : vId);
+                        }}
+                        title="More options"
+                      >
+                        <MoreVerticalIcon size={18} />
+                      </button>
+
+                      {openMenuId === vId && (
+                        <div
+                          className="search-more-dropdown"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="search-dropdown-item"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setOpenMenuId(null);
+                              onToggleWatchLater(video);
+                            }}
+                          >
+                            <ClockIcon size={18} />
+                            <span>{isWatchLater ? 'Remove from Watch Later' : 'Save to Watch Later'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            className="search-dropdown-item"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setOpenMenuId(null);
+                              if (onOpenSaveToPlaylist) {
+                                onOpenSaveToPlaylist(video);
+                              }
+                            }}
+                          >
+                            <PlaylistIcon size={18} />
+                            <span>Save to playlist</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
                   <div className="search-row-meta">
                     <span>{video.views}</span> • <span>{video.uploadDate}</span>
@@ -114,11 +210,17 @@ export default function SearchResultsPage({
                     <CheckIcon size={13} className="verified-icon" />
                   </div>
 
-                  <p className="search-row-desc">
-                    {video.description || 'Watch on YouTube Clone with zero ad interruptions.'}
-                  </p>
+                  {video.description && (
+                    <p className="search-row-desc">
+                      {video.description}
+                    </p>
+                  )}
+
+                  <div className="search-row-badges">
+                    <span className="search-video-badge">4K</span>
+                  </div>
                 </div>
-              </article>
+              </Link>
             );
           })}
         </div>

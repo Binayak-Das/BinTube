@@ -1,9 +1,11 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { PlayIcon, TrashIcon, ClockIcon } from './Icons.jsx';
 
 export default function WatchLaterPage({
   videos = [],
   onSelectVideo,
+  onPlayPlaylist,
   onRemoveVideo,
   onClearAll,
   onExplore,
@@ -18,14 +20,37 @@ export default function WatchLaterPage({
         <p className="empty-state-desc">
           Save interesting videos to watch later at your convenience without ads.
         </p>
-        <button className="nav-btn primary" onClick={onExplore}>
+        <Link to="/" className="nav-btn primary" onClick={onExplore}>
           Explore Videos
-        </button>
+        </Link>
       </div>
     );
   }
 
   const firstVideo = videos[0];
+  const firstVideoId = firstVideo?.videoId || firstVideo?._id;
+
+  const handlePlayVideoAtIndex = (index) => {
+    if (!videos || !videos[index]) return;
+    if (onPlayPlaylist) {
+      onPlayPlaylist(videos, index, 'Watch Later', 'watch-later');
+    } else if (onSelectVideo) {
+      onSelectVideo(videos[index]);
+    }
+  };
+
+  const handlePlayAllClick = (e) => {
+    e.preventDefault();
+    handlePlayVideoAtIndex(0);
+  };
+
+  const handleLinkClick = (e, video, index) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      return;
+    }
+    e.preventDefault();
+    handlePlayVideoAtIndex(index);
+  };
 
   return (
     <div className="watch-later-layout">
@@ -38,26 +63,31 @@ export default function WatchLaterPage({
             <ClockIcon size={48} />
           )}
         </div>
-        <h2 className="watch-later-header-title">Watch Later</h2>
-        <p className="watch-later-count-text">
-          {videos.length} {videos.length === 1 ? 'video' : 'videos'} • Private playlist
-        </p>
+        <div className="watch-later-details">
+          <h2 className="watch-later-header-title">Watch Later</h2>
+          <p className="watch-later-count-text">
+            {videos.length} {videos.length === 1 ? 'video' : 'videos'} • Private playlist
+          </p>
 
-        <div className="watch-later-actions">
-          <button
-            className="watch-later-play-all"
-            onClick={() => onSelectVideo(firstVideo)}
-          >
-            <PlayIcon size={16} />
-            <span>Play All</span>
-          </button>
-          <button
-            className="watch-later-clear-btn"
-            onClick={onClearAll}
-            title="Clear Watch Later playlist"
-          >
-            <TrashIcon size={16} />
-          </button>
+          <div className="watch-later-actions">
+            <button
+              type="button"
+              className="watch-later-play-all"
+              onClick={handlePlayAllClick}
+              title="Play all videos"
+            >
+              <PlayIcon size={16} />
+              <span>Play All</span>
+            </button>
+            <button
+              type="button"
+              className="watch-later-clear-btn"
+              onClick={onClearAll}
+              title="Clear Watch Later playlist"
+            >
+              <TrashIcon size={16} />
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -71,7 +101,7 @@ export default function WatchLaterPage({
 
               <div
                 className="watch-later-thumb"
-                onClick={() => onSelectVideo(video)}
+                onClick={(e) => handleLinkClick(e, video, index)}
               >
                 <img src={video.thumbnailUrl} alt={video.title} loading="lazy" />
                 <span className="duration-badge">{video.duration}</span>
@@ -79,7 +109,7 @@ export default function WatchLaterPage({
 
               <div
                 className="watch-later-item-info"
-                onClick={() => onSelectVideo(video)}
+                onClick={(e) => handleLinkClick(e, video, index)}
               >
                 <h3 className="watch-later-item-title">{video.title}</h3>
                 <p className="watch-later-item-channel">
@@ -88,6 +118,7 @@ export default function WatchLaterPage({
               </div>
 
               <button
+                type="button"
                 className="watch-later-remove-btn"
                 onClick={() => onRemoveVideo(vId)}
                 title="Remove from Watch Later"

@@ -11,6 +11,30 @@ const generateToken = (userId) => {
   return jwt.sign({ id: userId }, JWT_SECRET, { expiresIn: '7d' });
 };
 
+const formatUserResponse = (user) => {
+  return {
+    id: user._id,
+    username: user.username,
+    email: user.email,
+    watchLaterIds: (user.watchLater || []).map((item) => item.videoId || item.toString()),
+    watchLaterCount: (user.watchLater || []).length,
+    likedVideoIds: (user.likedVideos || []).map((item) => item.videoId || item.toString()),
+    likedCount: (user.likedVideos || []).length,
+    subscribedChannels: user.subscribedChannels || [],
+    subscriptionsCount: (user.subscribedChannels || []).length,
+    playlists: (user.playlists || []).map((p) => ({
+      id: p.id,
+      title: p.title,
+      description: p.description,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      videoCount: (p.videos || []).length,
+      coverThumbnail: (p.videos && p.videos.length > 0) ? p.videos[0].thumbnailUrl : '',
+    })),
+    playlistsCount: (user.playlists || []).length,
+  };
+};
+
 // Register
 router.post('/register', async (req, res) => {
   try {
@@ -52,19 +76,16 @@ router.post('/register', async (req, res) => {
       email: email.toLowerCase().trim(),
       password: hashedPassword,
       watchLater: [],
+      likedVideos: [],
+      subscribedChannels: [],
+      playlists: [],
     });
 
     const token = generateToken(newUser._id);
 
     return res.status(201).json({
       token,
-      user: {
-        id: newUser._id,
-        username: newUser.username,
-        email: newUser.email,
-        watchLaterIds: [],
-        watchLaterCount: 0,
-      },
+      user: formatUserResponse(newUser),
     });
   } catch (err) {
     console.error('Register error:', err);
@@ -101,13 +122,7 @@ router.post('/login', async (req, res) => {
 
     return res.json({
       token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        watchLaterIds: (user.watchLater || []).map((item) => item.videoId || item.toString()),
-        watchLaterCount: (user.watchLater || []).length,
-      },
+      user: formatUserResponse(user),
     });
   } catch (err) {
     console.error('Login error:', err);
@@ -124,13 +139,7 @@ router.get('/me', authRequired, async (req, res) => {
     }
 
     return res.json({
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        watchLaterIds: (user.watchLater || []).map((item) => item.videoId || item.toString()),
-        watchLaterCount: (user.watchLater || []).length,
-      },
+      user: formatUserResponse(user),
     });
   } catch (err) {
     console.error('Me error:', err);

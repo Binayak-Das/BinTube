@@ -1,12 +1,11 @@
 import React from 'react';
-import { ShortsIcon, ClockIcon, DownloadIcon } from './Icons.jsx';
+import { ShortsIcon, ClockIcon } from './Icons.jsx';
 
 export default function ShortsCard({
   video,
   onSelectVideo,
   isWatchLater,
   onToggleWatchLater,
-  onDownload,
 }) {
   return (
     <div className="shorts-card" onClick={() => onSelectVideo(video)}>
@@ -30,13 +29,6 @@ export default function ShortsCard({
             title={isWatchLater ? 'Remove from Watch Later' : 'Watch Later'}
           >
             <ClockIcon size={14} />
-          </button>
-          <button
-            className="quick-action-btn"
-            onClick={() => onDownload(video)}
-            title="Download Short"
-          >
-            <DownloadIcon size={14} />
           </button>
         </div>
 
