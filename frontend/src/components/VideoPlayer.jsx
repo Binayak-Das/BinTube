@@ -19,7 +19,9 @@ import {
   Forward10Icon,
   PlaylistIcon,
   SpeedometerIcon,
+  LoopIcon,
 } from './Icons.jsx';
+import CommentsSection from './CommentsSection.jsx';
 import { apiUrl } from '../config/api.js';
 
 // Format seconds to mm:ss or hh:mm:ss
@@ -50,6 +52,8 @@ export default function VideoPlayer({
   onToggleSubscribe,
   playlistContext = null,
   onOpenSaveToPlaylist,
+  currentUser = null,
+  onRequireAuth = null,
 }) {
   const containerRef = useRef(null);
   const playerRef = useRef(null);
@@ -71,6 +75,7 @@ export default function VideoPlayer({
   const [showSettings, setShowSettings] = useState(false);
   const [settingsView, setSettingsView] = useState('main'); // 'main' or 'speed'
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [isLooping, setIsLooping] = useState(() => localStorage.getItem('yt_loop') === 'true');
   const [isCCActive, setIsCCActive] = useState(false);
   const [hoverTime, setHoverTime] = useState(null);
   const [hoverPosition, setHoverPosition] = useState(0);
@@ -226,8 +231,16 @@ export default function VideoPlayer({
     }
   }, [isPlaylistMode, playlistNextVideo, playlistContext, autoplay, upNextVideo, nextVideo, onNotify, onSelectVideo]);
 
-  // Handle video end state (Plays up next after playlist finishes if autoplay is on)
+  // Handle video end state (Plays up next after playlist finishes if autoplay is on, or loops)
   const handleVideoEnded = useCallback(() => {
+    if (isLooping) {
+      if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+        playerRef.current.seekTo(0, true);
+        playerRef.current.playVideo();
+        setIsPlaying(true);
+        return;
+      }
+    }
     if (autoplay) {
       if (isPlaylistMode) {
         if (playlistNextVideo || upNextVideo) {
@@ -237,7 +250,7 @@ export default function VideoPlayer({
         playNextVideo();
       }
     }
-  }, [autoplay, isPlaylistMode, playlistNextVideo, upNextVideo, nextVideo, playNextVideo]);
+  }, [isLooping, autoplay, isPlaylistMode, playlistNextVideo, upNextVideo, nextVideo, playNextVideo]);
 
   const handleVideoEndedRef = useRef(null);
   handleVideoEndedRef.current = handleVideoEnded;
@@ -283,6 +296,7 @@ export default function VideoPlayer({
               requestWakeLock();
               const dur = e.target.getDuration();
               if (dur) setDuration(dur);
+
               try {
                 if (typeof e.target.unloadModule === 'function') {
                   e.target.unloadModule('captions');
@@ -868,6 +882,13 @@ export default function VideoPlayer({
     onNotify(nextVal ? 'Autoplay is on' : 'Autoplay is off');
   };
 
+  const handleToggleLoop = () => {
+    const nextVal = !isLooping;
+    setIsLooping(nextVal);
+    localStorage.setItem('yt_loop', String(nextVal));
+    onNotify(nextVal ? 'Loop video is on' : 'Loop video is off');
+  };
+
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
@@ -1027,7 +1048,7 @@ export default function VideoPlayer({
 
               {/* Right Controls */}
               <div className="yt-ctrls-right">
-                {/* Settings Gear with HD Badge */}
+                {/* Settings Gear */}
                 <div className="yt-settings-wrapper" ref={settingsMenuRef}>
                   <button
                     className={`yt-ctrl-btn yt-settings-btn ${showSettings ? 'active-settings' : ''}`}
@@ -1038,13 +1059,17 @@ export default function VideoPlayer({
                     title="Settings"
                   >
                     <SettingsIcon size={20} className={showSettings ? 'spin-icon' : ''} />
-                    <span className="yt-hd-badge">HD</span>
                   </button>
 
                   {/* Settings Popup Menu */}
                   {showSettings && (
-                    <div className="yt-settings-menu">
-                      {settingsView === 'speed' ? (
+                    <>
+                      <div
+                        className="yt-settings-backdrop"
+                        onClick={() => setShowSettings(false)}
+                      />
+                      <div className="yt-settings-menu">
+                        {settingsView === 'speed' ? (
                         <div className="yt-settings-subpanel">
                           <div
                             className="yt-menu-header yt-submenu-header"
@@ -1098,17 +1123,6 @@ export default function VideoPlayer({
                             <span>Playback Settings</span>
                           </div>
 
-                          {/* Quality Row */}
-                          <div className="yt-settings-row-interactive">
-                            <div className="yt-row-left">
-                              <span className="yt-row-icon-badge">HD</span>
-                              <span className="yt-row-title">Quality</span>
-                            </div>
-                            <div className="yt-row-right">
-                              <span className="yt-quality-pill">1080p HD</span>
-                            </div>
-                          </div>
-
                           {/* Playback Speed Row */}
                           <div
                             className="yt-settings-row-interactive"
@@ -1124,6 +1138,23 @@ export default function VideoPlayer({
                                 {playbackSpeed === 1 ? 'Normal' : `${playbackSpeed}x`}
                               </span>
                               <span className="yt-menu-nav-arrow">›</span>
+                            </div>
+                          </div>
+
+                          {/* Loop Video Row */}
+                          <div
+                            className="yt-settings-row-interactive"
+                            onClick={handleToggleLoop}
+                            title="Loop video"
+                          >
+                            <div className="yt-row-left">
+                              <LoopIcon size={17} />
+                              <span className="yt-row-title">Loop video</span>
+                            </div>
+                            <div className="yt-row-right">
+                              <div className={`yt-mini-switch ${isLooping ? 'on' : 'off'}`}>
+                                <span className="yt-mini-thumb" />
+                              </div>
                             </div>
                           </div>
 
@@ -1146,7 +1177,8 @@ export default function VideoPlayer({
                         </div>
                       )}
                     </div>
-                  )}
+                  </>
+                )}
                 </div>
 
                 {/* Miniplayer / Theater Mode Button */}
@@ -1297,6 +1329,14 @@ export default function VideoPlayer({
             </div>
           )}
         </div>
+
+        {/* Comments Section (Display real YouTube & user comments) */}
+        <CommentsSection
+          videoId={video.videoId || video._id}
+          currentUser={currentUser}
+          onRequireAuth={onRequireAuth}
+          onNotify={onNotify}
+        />
       </div>
 
       {/* Up Next / Related Column */}
@@ -1393,7 +1433,7 @@ export default function VideoPlayer({
                   key={`rel-${relId}-${index}`}
                   to={`/watch?v=${encodeURIComponent(relId)}`}
                   state={{ video: item }}
-                  className={`related-card ${index === 0 && autoplay ? 'next-in-queue' : ''}`}
+                  className="related-card"
                   onClick={handleRelClick}
                 >
                   <div className="related-thumb-box">

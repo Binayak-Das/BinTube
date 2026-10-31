@@ -556,3 +556,242 @@ export async function fetchYouTubeVideoById(videoId) {
 
   return { video, related: related.slice(0, 16) };
 }
+
+// In-memory cache for comments (5 minutes TTL)
+const commentsCache = new Map();
+const COMMENTS_CACHE_TTL = 5 * 60 * 1000;
+let cachedInnertubeKey = null;
+
+function extractCommentsPayload(nextJson) {
+  let totalCount = '0';
+  let comments = [];
+  let nextContinuationToken = null;
+  let topSortToken = null;
+  let newestSortToken = null;
+
+  for (const ep of nextJson?.onResponseReceivedEndpoints || []) {
+    const cmd = ep.reloadContinuationItemsCommand || ep.appendContinuationItemsAction;
+    for (const item of cmd?.continuationItems || []) {
+      if (item.commentsHeaderRenderer?.countText) {
+        totalCount =
+          item.commentsHeaderRenderer.countText.runs?.map((r) => r.text).join('') || '0';
+      }
+      const menu = item.commentsHeaderRenderer?.sortMenu?.sortFilterSubMenuRenderer?.subMenuItems;
+      if (menu) {
+        topSortToken = menu[0]?.serviceEndpoint?.continuationCommand?.token || null;
+        newestSortToken = menu[1]?.serviceEndpoint?.continuationCommand?.token || null;
+      }
+      const t = item.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token;
+      if (t) {
+        nextContinuationToken = t;
+      }
+    }
+  }
+
+  // Extract comments from mutations
+  const mutations = nextJson.frameworkUpdates?.entityBatchUpdate?.mutations || [];
+  for (const m of mutations) {
+    if (m.payload?.commentEntityPayload) {
+      const c = m.payload.commentEntityPayload;
+      const author = c.author?.displayName || 'User';
+      const avatar = c.author?.avatarThumbnailUrl || '';
+      const text = c.properties?.content?.content || '';
+      const time = c.properties?.publishedTime || '';
+      const likes = c.toolbar?.likeCountNotliked || '0';
+      if (text) {
+        comments.push({
+          id: c.properties?.commentId || Math.random().toString(36).slice(2),
+          author,
+          avatar,
+          text,
+          time,
+          likes,
+          isUserComment: false,
+        });
+      }
+    }
+  }
+
+  // Fallback parsing for legacy commentThreadRenderer
+  if (comments.length === 0) {
+    for (const ep of nextJson?.onResponseReceivedEndpoints || []) {
+      const cmd = ep.reloadContinuationItemsCommand || ep.appendContinuationItemsAction;
+      for (const item of cmd?.continuationItems || []) {
+        const r = item.commentThreadRenderer?.comment?.commentRenderer;
+        if (r) {
+          comments.push({
+            id: r.commentId,
+            author: r.authorText?.simpleText || 'User',
+            avatar: r.authorThumbnail?.thumbnails?.[0]?.url || '',
+            text: r.contentText?.runs?.map((x) => x.text).join('') || '',
+            time: r.publishedTimeText?.runs?.[0]?.text || '',
+            likes: r.voteCount?.simpleText || '0',
+            isUserComment: false,
+          });
+        }
+      }
+    }
+  }
+
+  return { totalCount, comments, nextContinuationToken, topSortToken, newestSortToken };
+}
+
+export async function fetchVideoComments(videoId, { continuation = null, sortBy = 'top' } = {}) {
+  if (!videoId) return { totalCount: '0', comments: [], hasMore: false };
+
+  // Cache check for initial requests without continuation
+  const cacheKey = `${videoId}_${sortBy}`;
+  if (!continuation) {
+    const cached = commentsCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < COMMENTS_CACHE_TTL) {
+      return cached.data;
+    }
+  }
+
+  try {
+    let key = cachedInnertubeKey;
+    let targetToken = continuation;
+
+    if (!key || !targetToken) {
+      const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+
+      if (!res.ok) {
+        return { totalCount: '0', comments: [], hasMore: false };
+      }
+
+      const html = await res.text();
+      const keyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+      key = keyMatch ? keyMatch[1] : null;
+      if (key) cachedInnertubeKey = key;
+
+      let initialToken = null;
+      const initialDataMatch = html.match(/var ytInitialData = ({.+?});<\/script>/s);
+      if (initialDataMatch) {
+        try {
+          const data = JSON.parse(initialDataMatch[1]);
+          const sections =
+            data?.contents?.twoColumnWatchNextResults?.results?.results?.contents || [];
+          for (const section of sections) {
+            if (section.itemSectionRenderer?.targetId === 'comments-section') {
+              const contents = section.itemSectionRenderer?.contents || [];
+              for (const item of contents) {
+                if (
+                  item.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token
+                ) {
+                  initialToken =
+                    item.continuationItemRenderer.continuationEndpoint.continuationCommand.token;
+                  break;
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (!key || !initialToken) {
+        return { totalCount: '0', comments: [], hasMore: false };
+      }
+
+      if (!targetToken) {
+        targetToken = initialToken;
+      }
+    }
+
+    const nextRes = await fetch(`https://www.youtube.com/youtubei/v1/next?key=${key}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'WEB',
+            clientVersion: '2.20240101.00.00',
+            hl: 'en',
+            gl: 'US',
+          },
+        },
+        continuation: targetToken,
+      }),
+    });
+
+    if (!nextRes.ok) {
+      return { totalCount: '0', comments: [], hasMore: false };
+    }
+
+    const nextJson = await nextRes.json();
+    let parsed = extractCommentsPayload(nextJson);
+
+    // If initial fetch requested newest comments and newestSortToken is available, fetch newest
+    if (!continuation && sortBy === 'newest' && parsed.newestSortToken) {
+      const newestRes = await fetch(`https://www.youtube.com/youtubei/v1/next?key=${key}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        body: JSON.stringify({
+          context: {
+            client: { clientName: 'WEB', clientVersion: '2.20240101.00.00', hl: 'en', gl: 'US' },
+          },
+          continuation: parsed.newestSortToken,
+        }),
+      });
+      if (newestRes.ok) {
+        const newestJson = await newestRes.json();
+        const newestParsed = extractCommentsPayload(newestJson);
+        newestParsed.totalCount = parsed.totalCount;
+        parsed = newestParsed;
+      }
+    }
+
+    // On initial load, fetch 1 extra continuation batch so ~40 comments display right away
+    if (!continuation && parsed.nextContinuationToken) {
+      try {
+        const batch2Res = await fetch(`https://www.youtube.com/youtubei/v1/next?key=${key}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+          body: JSON.stringify({
+            context: {
+              client: { clientName: 'WEB', clientVersion: '2.20240101.00.00', hl: 'en', gl: 'US' },
+            },
+            continuation: parsed.nextContinuationToken,
+          }),
+        });
+        if (batch2Res.ok) {
+          const batch2Json = await batch2Res.json();
+          const batch2Parsed = extractCommentsPayload(batch2Json);
+          parsed.comments = [...parsed.comments, ...batch2Parsed.comments];
+          parsed.nextContinuationToken =
+            batch2Parsed.nextContinuationToken || parsed.nextContinuationToken;
+        }
+      } catch (_) {}
+    }
+
+    const payload = {
+      totalCount: parsed.totalCount,
+      comments: parsed.comments,
+      nextContinuationToken: parsed.nextContinuationToken,
+      hasMore: Boolean(parsed.nextContinuationToken),
+    };
+
+    if (!continuation) {
+      commentsCache.set(cacheKey, { timestamp: Date.now(), data: payload });
+    }
+
+    return payload;
+  } catch (err) {
+    console.error('Error in fetchVideoComments:', err.message);
+    return { totalCount: '0', comments: [], hasMore: false };
+  }
+}

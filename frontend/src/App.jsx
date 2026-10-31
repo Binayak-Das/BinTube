@@ -1017,6 +1017,8 @@ export default function App() {
                     setSaveToPlaylistTarget(vid);
                   }
                 }}
+                currentUser={user}
+                onRequireAuth={requireAuth}
               />
             ) : (
               <div

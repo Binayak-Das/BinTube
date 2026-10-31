@@ -11,6 +11,7 @@ import watchLaterRoutes from './routes/watchLater.js';
 import likedVideosRoutes from './routes/likedVideos.js';
 import subscriptionsRoutes from './routes/subscriptions.js';
 import playlistsRoutes from './routes/playlists.js';
+import commentRoutes from './routes/comments.js';
 
 dotenv.config();
 
@@ -56,6 +57,7 @@ app.use('/api/watch-later', watchLaterRoutes);
 app.use('/api/liked-videos', likedVideosRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 app.use('/api/playlists', playlistsRoutes);
+app.use('/api/videos', commentRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
