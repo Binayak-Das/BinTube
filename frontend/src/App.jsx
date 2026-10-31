@@ -985,6 +985,7 @@ export default function App() {
                   setSaveToPlaylistTarget(vid);
                 }
               }}
+              onNotify={showToast}
               sentinelRef={sentinelRef}
             />
           )}

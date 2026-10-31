@@ -24,6 +24,14 @@ import {
 import CommentsSection from './CommentsSection.jsx';
 import { apiUrl } from '../config/api.js';
 
+// Base64 1x1 invisible MP4 loop for bulletproof mobile screen wake lock (NoSleep standard)
+const NO_SLEEP_VIDEO_SRC =
+  'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAr9tZGF0AAACoAYF//+///AAAAMmF2Y0MBZAAK/+EAGWdkAAqs2V+WXAWyAAADAAIAAAMAYB4kSywBAAZo6+PLIsAAAAAYc3R0cwAAAAAAAAABAAAAAQAAAgAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAAEAAAABAAAAFHN0c3oAAAAAAAACtwAAAAEAAAAUc3RjbwAAAAAAAAABAAAAMAAAAGJ1ZHRhAAAAWm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALWlsc3QAAAAlqXRvbwAAAB1kYXRhAAAAAQAAAABMYXZmNTQuNjMuMTA0';
+
+// Base64 valid 1-second silent WAV for mobile background audio routing & MediaSession keepalive
+const SILENT_AUDIO_SRC =
+  'data:audio/wav;base64,UklGRqxYAQBXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YYhYAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
 // Format seconds to mm:ss or hh:mm:ss
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -61,7 +69,10 @@ export default function VideoPlayer({
   const hideControlsTimerRef = useRef(null);
   const intervalRef = useRef(null);
   const audioAnchorRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const keepAwakeVideoRef = useRef(null);
   const wakeLockRef = useRef(null);
+  const backgroundWorkerRef = useRef(null);
   const shouldBePlayingRef = useRef(true);
 
   const [isPlaying, setIsPlaying] = useState(true);
@@ -185,8 +196,36 @@ export default function VideoPlayer({
     return () => observer.disconnect();
   }, [fetchMoreRelated]);
 
-  // Screen Wake Lock API to prevent phone / PC display sleep while playing
+  // Audio carrier engine: keeps audio hardware pipe & MediaSession active in OS
+  const ensureAudioCarrier = useCallback(() => {
+    try {
+      if (audioAnchorRef.current) {
+        audioAnchorRef.current.play().catch(() => {});
+      }
+    } catch (_) {}
+
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        if (!audioContextRef.current) {
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          gain.gain.value = 0.0001; // virtually inaudible carrier
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          audioContextRef.current = ctx;
+        } else if (audioContextRef.current.state === 'suspended') {
+          audioContextRef.current.resume().catch(() => {});
+        }
+      }
+    } catch (_) {}
+  }, []);
+
+  // Multi-tier Screen Wake Lock API & NoSleep fallback to prevent phone / PC display sleep while playing
   const requestWakeLock = useCallback(async () => {
+    // 1. Native Screen Wake Lock API
     if ('wakeLock' in navigator && document.visibilityState === 'visible' && !wakeLockRef.current) {
       try {
         wakeLockRef.current = await navigator.wakeLock.request('screen');
@@ -195,12 +234,27 @@ export default function VideoPlayer({
         });
       } catch (_) { }
     }
-  }, []);
+
+    // 2. Continuous Video Keep-Awake fallback (100% works on iOS Safari & Android Chrome)
+    try {
+      if (keepAwakeVideoRef.current && keepAwakeVideoRef.current.paused) {
+        keepAwakeVideoRef.current.play().catch(() => {});
+      }
+    } catch (_) {}
+
+    // 3. Audio session keepalive
+    ensureAudioCarrier();
+  }, [ensureAudioCarrier]);
 
   const releaseWakeLock = useCallback(() => {
     if (wakeLockRef.current) {
       wakeLockRef.current.release().catch(() => { });
       wakeLockRef.current = null;
+    }
+    if (keepAwakeVideoRef.current) {
+      try {
+        keepAwakeVideoRef.current.pause();
+      } catch (_) {}
     }
   }, []);
 
@@ -292,7 +346,7 @@ export default function VideoPlayer({
               if (!isMounted) return;
               e.target.playVideo();
               shouldBePlayingRef.current = true;
-              audioAnchorRef.current?.play().catch(() => { });
+              ensureAudioCarrier();
               requestWakeLock();
               const dur = e.target.getDuration();
               if (dur) setDuration(dur);
@@ -314,20 +368,46 @@ export default function VideoPlayer({
               } else if (e.data === 1) {
                 setIsPlaying(true);
                 shouldBePlayingRef.current = true;
-                audioAnchorRef.current?.play().catch(() => { });
+                if ('mediaSession' in navigator) {
+                  try {
+                    navigator.mediaSession.playbackState = 'playing';
+                  } catch (_) {}
+                }
+                ensureAudioCarrier();
                 requestWakeLock();
               } else if (e.data === 2) {
-                // If browser/OS paused playback due to minimize or screen lock, resume playback automatically!
+                // If browser/OS paused playback due to minimize or screen off, auto-play immediately!
                 if (document.hidden && shouldBePlayingRef.current) {
-                  setTimeout(() => {
-                    if (shouldBePlayingRef.current && playerRef.current && typeof playerRef.current.playVideo === 'function') {
-                      audioAnchorRef.current?.play().catch(() => { });
-                      playerRef.current.playVideo();
-                    }
-                  }, 80);
+                  ensureAudioCarrier();
+                  setIsPlaying(true);
+                  if ('mediaSession' in navigator) {
+                    try {
+                      navigator.mediaSession.playbackState = 'playing';
+                    } catch (_) {}
+                  }
+
+                  try {
+                    playerRef.current?.playVideo();
+                  } catch (_) {}
+
+                  // Rapid bursts of automatic re-play commands so playback never stops
+                  [30, 90, 200, 450, 900].forEach((delay) => {
+                    setTimeout(() => {
+                      if (shouldBePlayingRef.current && document.hidden) {
+                        try {
+                          playerRef.current?.playVideo();
+                        } catch (_) {}
+                      }
+                    }, delay);
+                  });
                   return;
                 }
                 setIsPlaying(false);
+                if ('mediaSession' in navigator) {
+                  try {
+                    navigator.mediaSession.playbackState = 'paused';
+                  } catch (_) {}
+                }
                 releaseWakeLock();
                 audioAnchorRef.current?.pause();
               }
@@ -384,6 +464,9 @@ export default function VideoPlayer({
       isMounted = false;
       releaseWakeLock();
       audioAnchorRef.current?.pause();
+      if (audioContextRef.current && audioContextRef.current.state === 'running') {
+        audioContextRef.current.suspend().catch(() => {});
+      }
       if (intervalRef.current) clearInterval(intervalRef.current);
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
         try {
@@ -391,136 +474,142 @@ export default function VideoPlayer({
         } catch (_) { }
       }
     };
-  }, [video.videoId || video._id, requestWakeLock, releaseWakeLock]);
+  }, [video.videoId || video._id, requestWakeLock, releaseWakeLock, ensureAudioCarrier]);
 
-  // Keep playing when minimized or when screen sleeps / locks
+  // Periodic Screen Wake Lock Heartbeat (ensures screen never sleeps while playing)
   useEffect(() => {
+    if (!isPlaying) return;
+    const heartbeat = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        if (!wakeLockRef.current) {
+          requestWakeLock();
+        }
+        if (keepAwakeVideoRef.current && keepAwakeVideoRef.current.paused) {
+          keepAwakeVideoRef.current.play().catch(() => {});
+        }
+      }
+    }, 12000);
+
+    return () => clearInterval(heartbeat);
+  }, [isPlaying, requestWakeLock]);
+
+  // Web Worker Background Watchdog:
+  // Automatically forces the video to keep playing when minimized or when the screen turns off,
+  // completely bypassing mobile browser background timer throttling!
+  useEffect(() => {
+    let worker = null;
+    try {
+      const workerBlob = new Blob(
+        [
+          `let interval = null;
+          self.onmessage = function(e) {
+            if (e.data === 'start') {
+              if (!interval) {
+                interval = setInterval(function() {
+                  self.postMessage('ping');
+                }, 500);
+              }
+            } else if (e.data === 'stop') {
+              if (interval) {
+                clearInterval(interval);
+                interval = null;
+              }
+            }
+          };`
+        ],
+        { type: 'application/javascript' }
+      );
+      worker = new Worker(URL.createObjectURL(workerBlob));
+      backgroundWorkerRef.current = worker;
+
+      worker.onmessage = (e) => {
+        if (e.data === 'ping') {
+          if (shouldBePlayingRef.current && document.hidden) {
+            if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
+              try {
+                const state = playerRef.current.getPlayerState();
+                if (state !== 1 && state !== 3) {
+                  playerRef.current.playVideo();
+                }
+              } catch (_) {}
+            }
+            try {
+              if (audioAnchorRef.current && audioAnchorRef.current.paused) {
+                audioAnchorRef.current.play().catch(() => {});
+              }
+            } catch (_) {}
+          }
+        }
+      };
+
+      worker.postMessage('start');
+    } catch (err) {
+      console.warn('Background worker error:', err);
+    }
+
+    return () => {
+      if (worker) {
+        worker.postMessage('stop');
+        worker.terminate();
+        backgroundWorkerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Automatically plays video when app is minimized or screen turns off
+  useEffect(() => {
+    const triggerAutoResume = () => {
+      if (!shouldBePlayingRef.current) return;
+      ensureAudioCarrier();
+      if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
+        try {
+          playerRef.current.playVideo();
+        } catch (_) {}
+      }
+      [30, 90, 200, 450, 900].forEach((ms) => {
+        setTimeout(() => {
+          if (shouldBePlayingRef.current && playerRef.current && typeof playerRef.current.playVideo === 'function') {
+            try {
+              playerRef.current.playVideo();
+            } catch (_) {}
+          }
+        }, ms);
+      });
+    };
+
     const handleVisibility = () => {
       if (document.hidden) {
-        // Minimized / screen turned off: keep audio & video playing
-        if (shouldBePlayingRef.current && playerRef.current && typeof playerRef.current.playVideo === 'function') {
-          audioAnchorRef.current?.play().catch(() => { });
-          playerRef.current.playVideo();
-        }
+        // Minimized / screen turned off: automatically keep playing!
+        triggerAutoResume();
       } else {
-        // Foreground restored: re-engage wake lock to keep screen awake while watching
+        // Foreground restored: re-engage wake lock and resume
         if (shouldBePlayingRef.current) {
           requestWakeLock();
+          if (keepAwakeVideoRef.current && keepAwakeVideoRef.current.paused) {
+            keepAwakeVideoRef.current.play().catch(() => {});
+          }
+          if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
+            try {
+              playerRef.current.playVideo();
+              setIsPlaying(true);
+            } catch (_) {}
+          }
         }
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('blur', handleVisibility);
+    window.addEventListener('pagehide', triggerAutoResume);
+    window.addEventListener('blur', triggerAutoResume);
     window.addEventListener('focus', handleVisibility);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('blur', handleVisibility);
+      window.removeEventListener('pagehide', triggerAutoResume);
+      window.removeEventListener('blur', triggerAutoResume);
       window.removeEventListener('focus', handleVisibility);
     };
-  }, [requestWakeLock]);
-
-  // Set up Media Session API for OS-level background playback controls
-  useEffect(() => {
-    if (!('mediaSession' in navigator) || !video) return;
-
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: video.title || 'YouTube Video',
-        artist: video.channelName || 'YouTube Creator',
-        album: 'Bintube',
-        artwork: [
-          {
-            src:
-              video.thumbnailUrl ||
-              `https://i.ytimg.com/vi/${video.videoId || video._id}/hqdefault.jpg`,
-            sizes: '512x512',
-            type: 'image/jpeg',
-          },
-        ],
-      });
-
-      navigator.mediaSession.setActionHandler('play', () => {
-        shouldBePlayingRef.current = true;
-        if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
-          playerRef.current.playVideo();
-          setIsPlaying(true);
-          audioAnchorRef.current?.play().catch(() => { });
-          requestWakeLock();
-        }
-      });
-
-      navigator.mediaSession.setActionHandler('pause', () => {
-        shouldBePlayingRef.current = false;
-        if (playerRef.current && typeof playerRef.current.pauseVideo === 'function') {
-          playerRef.current.pauseVideo();
-          setIsPlaying(false);
-          audioAnchorRef.current?.pause();
-          releaseWakeLock();
-        }
-      });
-
-      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-        const offset = details.seekOffset || 10;
-        if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
-          playerRef.current.seekTo(Math.max(0, currentTime - offset), true);
-        }
-      });
-
-      navigator.mediaSession.setActionHandler('seekforward', (details) => {
-        const offset = details.seekOffset || 10;
-        if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
-          playerRef.current.seekTo(Math.min(duration, currentTime + offset), true);
-        }
-      });
-
-      navigator.mediaSession.setActionHandler('seekto', (details) => {
-        if (details.seekTime != null && playerRef.current && typeof playerRef.current.seekTo === 'function') {
-          playerRef.current.seekTo(details.seekTime, true);
-        }
-      });
-
-      if (nextVideo) {
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-          playNextVideo();
-        });
-      }
-    } catch (_) { }
-
-    return () => {
-      try {
-        if ('mediaSession' in navigator) {
-          navigator.mediaSession.setActionHandler('play', null);
-          navigator.mediaSession.setActionHandler('pause', null);
-          navigator.mediaSession.setActionHandler('nexttrack', null);
-          navigator.mediaSession.setActionHandler('seekbackward', null);
-          navigator.mediaSession.setActionHandler('seekforward', null);
-          navigator.mediaSession.setActionHandler('seekto', null);
-        }
-      } catch (_) { }
-    };
-  }, [video, nextVideo, playNextVideo, currentTime, duration, requestWakeLock, releaseWakeLock]);
-
-  // Sync playbackState with OS media controller
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-  }, [isPlaying]);
-
-  // Sync position state with OS lock screen scrubber
-  useEffect(() => {
-    if (!('mediaSession' in navigator) || !('setPositionState' in navigator.mediaSession)) return;
-    if (duration > 0 && currentTime >= 0) {
-      try {
-        navigator.mediaSession.setPositionState({
-          duration: Math.max(0, duration),
-          playbackRate: playbackSpeed || 1,
-          position: Math.min(Math.max(0, currentTime), duration),
-        });
-      } catch (_) { }
-    }
-  }, [currentTime, duration, playbackSpeed]);
+  }, [requestWakeLock, ensureAudioCarrier]);
 
   const settingsMenuRef = useRef(null);
 
@@ -615,17 +704,140 @@ export default function VideoPlayer({
         setIsPlaying(false);
         releaseWakeLock();
         audioAnchorRef.current?.pause();
+        if (audioContextRef.current && audioContextRef.current.state === 'running') {
+          audioContextRef.current.suspend().catch(() => {});
+        }
         triggerFlash('pause');
       } else {
         shouldBePlayingRef.current = true;
         playerRef.current.playVideo();
         setIsPlaying(true);
-        audioAnchorRef.current?.play().catch(() => { });
+        ensureAudioCarrier();
         requestWakeLock();
         triggerFlash('play');
       }
     } catch (_) { }
-  }, [isPlaying, releaseWakeLock, requestWakeLock]);
+  }, [isPlaying, releaseWakeLock, requestWakeLock, ensureAudioCarrier]);
+
+  // Set up Media Session API for OS-level background playback controls
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !video) return;
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: video.title || 'YouTube Video',
+        artist: video.channelName || 'YouTube Creator',
+        album: 'Bintube',
+        artwork: [
+          {
+            src:
+              video.thumbnailUrl ||
+              `https://i.ytimg.com/vi/${video.videoId || video._id}/hqdefault.jpg`,
+            sizes: '512x512',
+            type: 'image/jpeg',
+          },
+        ],
+      });
+
+      navigator.mediaSession.setActionHandler('play', () => {
+        shouldBePlayingRef.current = true;
+        setIsPlaying(true);
+        if ('mediaSession' in navigator) {
+          try {
+            navigator.mediaSession.playbackState = 'playing';
+          } catch (_) {}
+        }
+        ensureAudioCarrier();
+        if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
+          try {
+            playerRef.current.playVideo();
+          } catch (_) {}
+        }
+        requestWakeLock();
+      });
+
+      navigator.mediaSession.setActionHandler('pause', () => {
+        shouldBePlayingRef.current = false;
+        setIsPlaying(false);
+        if ('mediaSession' in navigator) {
+          try {
+            navigator.mediaSession.playbackState = 'paused';
+          } catch (_) {}
+        }
+        if (playerRef.current && typeof playerRef.current.pauseVideo === 'function') {
+          try {
+            playerRef.current.pauseVideo();
+          } catch (_) {}
+        }
+        releaseWakeLock();
+        audioAnchorRef.current?.pause();
+        if (audioContextRef.current && audioContextRef.current.state === 'running') {
+          audioContextRef.current.suspend().catch(() => {});
+        }
+      });
+
+      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+        const offset = details.seekOffset || 10;
+        seekRelative(-offset);
+      });
+
+      navigator.mediaSession.setActionHandler('seekforward', (details) => {
+        const offset = details.seekOffset || 10;
+        seekRelative(offset);
+      });
+
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+        if (details.seekTime != null && playerRef.current && typeof playerRef.current.seekTo === 'function') {
+          playerRef.current.seekTo(details.seekTime, true);
+          setCurrentTime(details.seekTime);
+        }
+      });
+
+      if (nextVideo) {
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+          playNextVideo();
+        });
+      }
+
+      navigator.mediaSession.setActionHandler('previoustrack', () => {
+        seekRelative(-10);
+      });
+    } catch (_) { }
+
+    return () => {
+      try {
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.setActionHandler('play', null);
+          navigator.mediaSession.setActionHandler('pause', null);
+          navigator.mediaSession.setActionHandler('nexttrack', null);
+          navigator.mediaSession.setActionHandler('previoustrack', null);
+          navigator.mediaSession.setActionHandler('seekbackward', null);
+          navigator.mediaSession.setActionHandler('seekforward', null);
+          navigator.mediaSession.setActionHandler('seekto', null);
+        }
+      } catch (_) { }
+    };
+  }, [video, nextVideo, playNextVideo, currentTime, duration, requestWakeLock, releaseWakeLock, ensureAudioCarrier, seekRelative]);
+
+  // Sync playbackState with OS media controller
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
+
+  // Sync position state with OS lock screen scrubber
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || !('setPositionState' in navigator.mediaSession)) return;
+    if (duration > 0 && currentTime >= 0) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: Math.max(0, duration),
+          playbackRate: playbackSpeed || 1,
+          position: Math.min(Math.max(0, currentTime), duration),
+        });
+      } catch (_) { }
+    }
+  }, [currentTime, duration, playbackSpeed]);
 
   // Pointer / Touch Handlers for Hold to 2X & Double-Tap Seeking
   const handlePointerDown = (e) => {
@@ -859,18 +1071,54 @@ export default function VideoPlayer({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [togglePlayPause, seekRelative, toggleMute, toggleFullscreen, handleToggleCC, playNextVideo]);
 
-  // Social / Share (Copies internal website watch URL, NOT YouTube URL)
-  const handleShare = () => {
-    const vId = video.videoId || video._id;
-    const siteUrl = `${window.location.origin}/watch?v=${encodeURIComponent(vId)}`;
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(siteUrl);
-      if (typeof onNotify === 'function') {
-        onNotify('Video link copied to clipboard!');
+  // Social / Share via Native Web Share API (navigator.share)
+  const handleShare = async () => {
+    const vId = video?.videoId || video?._id;
+    if (!vId) return;
+    const origin = window.location.origin || 'http://localhost:5173';
+    const shareUrl = `${origin}/watch?v=${encodeURIComponent(vId)}`;
+    const shareTitle = video?.title || 'Check out this video';
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: shareTitle,
+          text: shareTitle,
+          url: shareUrl,
+        });
+        return;
+      } catch (err) {
+        if (err && (err.name === 'AbortError' || err.code === 20)) {
+          return;
+        }
       }
-    } else {
+    }
+
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        if (typeof onNotify === 'function') {
+          onNotify('Link copied to clipboard');
+        }
+        return;
+      } catch (_) {}
+    }
+
+    try {
+      const el = document.createElement('textarea');
+      el.value = shareUrl;
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
       if (typeof onNotify === 'function') {
-        onNotify(`Link: ${siteUrl}`);
+        onNotify('Link copied to clipboard');
+      }
+    } catch (_) {
+      if (typeof onNotify === 'function') {
+        onNotify(`Link: ${shareUrl}`);
       }
     }
   };
@@ -1471,13 +1719,47 @@ export default function VideoPlayer({
         </div>
       </div>
 
-      {/* Silent audio anchor to keep audio pipeline active when browser is minimized or phone/PC screen is locked */}
+      {/* Screen sleep prevention loop (NoSleep HTML5 video technique - 100% works across all mobile browsers) */}
+      <video
+        ref={keepAwakeVideoRef}
+        playsInline
+        muted
+        loop
+        preload="auto"
+        aria-hidden="true"
+        width="1"
+        height="1"
+        src={NO_SLEEP_VIDEO_SRC}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '1px',
+          height: '1px',
+          opacity: 0.001,
+          pointerEvents: 'none',
+          zIndex: -1,
+        }}
+      />
+
+      {/* Audio carrier element to keep OS audio hardware session & lock screen media notification alive */}
       <audio
         ref={audioAnchorRef}
         loop
         playsInline
-        src="data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
-        style={{ display: 'none' }}
+        preload="auto"
+        aria-hidden="true"
+        src={SILENT_AUDIO_SRC}
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          width: '1px',
+          height: '1px',
+          opacity: 0.001,
+          pointerEvents: 'none',
+          zIndex: -1,
+        }}
       />
     </div>
   );

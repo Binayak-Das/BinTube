@@ -58,6 +58,11 @@ export default function Sidebar({
         className={`yt-sidebar ${isOpen ? 'open' : 'closed'} ${
           isOverlay ? 'overlay-drawer' : ''
         }`}
+        style={
+          isOverlay && !isOpen
+            ? { visibility: 'hidden', boxShadow: 'none', pointerEvents: 'none' }
+            : undefined
+        }
       >
         {isOverlay && (
           <div className="drawer-header">
