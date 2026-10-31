@@ -93,9 +93,6 @@ export default function PlaylistsPage({
                     <PlaylistIcon size={48} />
                   </div>
                 )}
-                <div className="liked-cover-overlay">
-                  <PlaylistIcon size={36} />
-                </div>
               </div>
 
               <div className="liked-playlist-details">

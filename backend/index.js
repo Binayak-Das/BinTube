@@ -28,7 +28,7 @@ async function connectDB() {
   if (mongoose.connection.readyState === 1) return;
   if (!dbPromise) {
     dbPromise = mongoose.connect(MONGO_URI).then(async () => {
-      console.log('Connected to MongoDB database');
+      console.log('✅ DATABASE CONNECTED');
       await ensureDemoUser();
     });
   }
@@ -97,7 +97,7 @@ async function ensureDemoUser() {
 // Start standalone HTTP server locally (when not running in Vercel serverless)
 if (!process.env.VERCEL) {
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`YouTube Clone server running on http://127.0.0.1:${PORT}`);
+    console.log(`🚀 SERVER IS LIVE ON PORT ${PORT}`);
   });
   connectDB().catch((err) => {
     console.error('MongoDB initial connection error:', err.message);

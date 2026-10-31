@@ -2103,6 +2103,10 @@ textarea {
   font-size: 13px;
   font-weight: 500;
   transition: background-color 0.15s;
+
+  >span {
+    width: max-content;
+  }
 }
 
 .action-pill-btn:hover {
@@ -3017,6 +3021,29 @@ textarea {
   .nav-left {
     gap: 6px;
   }
+
+  .search-results-page {
+    padding: 0;
+  }
+}
+
+@media (max-width: 430px) {
+  .search-results-list {
+    >a {
+      flex-direction: column;
+      gap: 5px;
+      align-items: center;
+
+      >.search-thumb-box {
+        min-width: 100% !important;
+
+        >img {
+          width: 100% !important;
+
+        }
+      }
+    }
+  }
 }
 
 @media (max-width: 380px) {
@@ -3041,7 +3068,6 @@ textarea {
 
   .liked-playlist-actions,
   .watch-later-actions {
-    flex-direction: column;
     gap: 6px;
   }
 }
@@ -3394,17 +3420,6 @@ textarea {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.liked-cover-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  pointer-events: none;
 }
 
 .liked-playlist-details {

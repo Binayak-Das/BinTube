@@ -2,16 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ClockIcon, CheckIcon, MoreVerticalIcon, PlaylistIcon } from './Icons.jsx';
 
-const SEARCH_FILTERS = [
-  'All',
-  'Shorts',
-  'Unwatched',
-  'Watched',
-  'Videos',
-  'Recently uploaded',
-  'Live',
-];
-
 export default function SearchResultsPage({
   searchQuery,
   videos = [],
@@ -33,21 +23,6 @@ export default function SearchResultsPage({
   }, []);
   return (
     <div className="search-results-page">
-      {/* YouTube Filter Chips Bar (Image 1) */}
-      <div className="search-filter-chips-bar">
-        <div className="search-chips-list">
-          {SEARCH_FILTERS.map((filter) => (
-            <button
-              key={filter}
-              type="button"
-              className={`search-chip-btn ${activeFilter === filter ? 'active' : ''}`}
-              onClick={() => setActiveFilter(filter)}
-            >
-              {filter}
-            </button>
-          ))}
-        </div>
-      </div>
       {videos.length === 0 && loading ? (
         <div className="search-skeleton-list">
           {[1, 2, 3, 4, 5, 6].map((i) => (

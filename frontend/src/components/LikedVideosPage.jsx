@@ -58,9 +58,6 @@ export default function LikedVideosPage({
                 alt="Liked Videos Playlist"
                 className="liked-cover-img"
               />
-              <div className="liked-cover-overlay">
-                <ThumbsUpIcon size={36} filled={true} />
-              </div>
             </div>
 
             <div className="liked-playlist-details">
