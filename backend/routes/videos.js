@@ -8,7 +8,11 @@ import {
 } from '../services/youtube.js';
 
 const router = express.Router();
-const ytdl = new Ytdl({ clients: [Client.Mweb, Client.WebEmbedded, Client.Tv, Client.VisionOS] });
+// Prioritize VisionOS, Tv, and WebEmbedded clients (zero player-script/PO token delay, resolves in ~1.2s)
+const ytdl = new Ytdl({
+  clients: [Client.VisionOS, Client.Tv, Client.WebEmbedded],
+  timeoutMs: 6500,
+});
 
 // Anti-caching middleware so every page refresh receives fresh randomized videos
 router.use((req, res, next) => {
@@ -571,6 +575,8 @@ async function resolveVideoFormats(id, forceRefresh = false) {
     audioUrl: audioFormat?.url || videoFormat?.url,
     videoType: videoFormat?.mimeType?.split(';')?.[0] || 'video/mp4',
     audioType: audioFormat?.mimeType?.split(';')?.[0] || 'audio/mp4',
+    contentLength: parseInt(videoFormat?.contentLength, 10) || null,
+    audioContentLength: parseInt(audioFormat?.contentLength, 10) || null,
     hasAudio: Boolean(videoFormat?.hasAudio),
     expiresAt: Date.now() + 45 * 60 * 1000,
   };
@@ -579,6 +585,34 @@ async function resolveVideoFormats(id, forceRefresh = false) {
     streamUrlCache.set(id, result);
   }
   return result;
+}
+
+// 1.5MB safe chunk size for videos and 512KB for audio (prevents Vercel 4.5MB payload limit & function timeout)
+const VIDEO_CHUNK_SIZE = 1.5 * 1024 * 1024;
+const AUDIO_CHUNK_SIZE = 512 * 1024;
+
+function getSafeRange(rangeHeader, totalLength, chunkSize) {
+  let start = 0;
+  let end;
+
+  if (rangeHeader && rangeHeader.startsWith('bytes=')) {
+    const parts = rangeHeader.replace(/bytes=/, '').split('-');
+    start = parseInt(parts[0], 10) || 0;
+    if (parts[1]) {
+      end = parseInt(parts[1], 10);
+    }
+  }
+
+  // If no end was provided by browser (e.g. 'bytes=0-') or chunk is too big, cap it safely
+  if (end === undefined || isNaN(end) || (end - start + 1) > (chunkSize * 2)) {
+    end = start + chunkSize - 1;
+  }
+
+  if (totalLength && end >= totalLength) {
+    end = totalLength - 1;
+  }
+
+  return { start, end, rangeString: `bytes=${start}-${end}` };
 }
 
 // Stream Video Directly (HTML5 <video> range-supported direct stream)
@@ -593,13 +627,13 @@ router.get('/:id/stream', async (req, res) => {
       return res.status(404).json({ message: 'No playable video stream found' });
     }
 
+    const { rangeString } = getSafeRange(rangeHeader, formats.contentLength, VIDEO_CHUNK_SIZE);
+
     const forwardHeaders = {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Range': rangeString,
     };
-    if (rangeHeader) {
-      forwardHeaders['Range'] = rangeHeader;
-    }
 
     let upstream = await fetch(formats.videoUrl, { headers: forwardHeaders });
 
@@ -626,16 +660,18 @@ router.get('/:id/stream', async (req, res) => {
     res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
     res.setHeader('Content-Type', upstream.headers.get('content-type') || formats.videoType || 'video/mp4');
 
-    if (upstream.status === 206) {
+    const cr = upstream.headers.get('content-range');
+    const cl = upstream.headers.get('content-length');
+
+    if (cr) {
       res.status(206);
-      const cr = upstream.headers.get('content-range');
-      if (cr) res.setHeader('Content-Range', cr);
-      const cl = upstream.headers.get('content-length');
-      if (cl) res.setHeader('Content-Length', cl);
+      res.setHeader('Content-Range', cr);
     } else {
       res.status(upstream.status);
-      const cl = upstream.headers.get('content-length');
-      if (cl) res.setHeader('Content-Length', cl);
+    }
+
+    if (cl) {
+      res.setHeader('Content-Length', cl);
     }
 
     const nodeStream = Readable.fromWeb(upstream.body);
@@ -663,13 +699,13 @@ router.get('/:id/audio', async (req, res) => {
       return res.status(404).json({ message: 'No playable audio stream found' });
     }
 
+    const { rangeString } = getSafeRange(rangeHeader, formats.audioContentLength, AUDIO_CHUNK_SIZE);
+
     const forwardHeaders = {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'Range': rangeString,
     };
-    if (rangeHeader) {
-      forwardHeaders['Range'] = rangeHeader;
-    }
 
     let upstream = await fetch(formats.audioUrl, { headers: forwardHeaders });
 
@@ -696,16 +732,18 @@ router.get('/:id/audio', async (req, res) => {
     res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
     res.setHeader('Content-Type', upstream.headers.get('content-type') || formats.audioType || 'audio/mp4');
 
-    if (upstream.status === 206) {
+    const cr = upstream.headers.get('content-range');
+    const cl = upstream.headers.get('content-length');
+
+    if (cr) {
       res.status(206);
-      const cr = upstream.headers.get('content-range');
-      if (cr) res.setHeader('Content-Range', cr);
-      const cl = upstream.headers.get('content-length');
-      if (cl) res.setHeader('Content-Length', cl);
+      res.setHeader('Content-Range', cr);
     } else {
       res.status(upstream.status);
-      const cl = upstream.headers.get('content-length');
-      if (cl) res.setHeader('Content-Length', cl);
+    }
+
+    if (cl) {
+      res.setHeader('Content-Length', cl);
     }
 
     const nodeStream = Readable.fromWeb(upstream.body);

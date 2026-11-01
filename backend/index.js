@@ -45,9 +45,14 @@ async function connectDB() {
   await dbPromise;
 }
 
-// Auto-connect to DB before handling requests (skip for health check and suggestions)
+// Auto-connect to DB before handling requests (skip for stream, audio, health check, and suggestions)
 app.use(async (req, res, next) => {
-  if (req.path === '/api/health' || req.path.includes('/suggestions')) {
+  if (
+    req.path === '/api/health' ||
+    req.path.includes('/suggestions') ||
+    req.path.includes('/stream') ||
+    req.path.includes('/audio')
+  ) {
     return next();
   }
   try {
