@@ -46,6 +46,28 @@ function formatTime(seconds) {
   return `${m}:${sStr}`;
 }
 
+// Robust duration parser for timestamp strings ('3:37', '1:04:22') or numeric seconds
+export function parseDuration(val) {
+  if (!val) return 0;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (/^\d+$/.test(trimmed)) return Number(trimmed);
+    const parts = trimmed.split(':').map((p) => Number(p));
+    if (parts.some(isNaN)) return 0;
+    if (parts.length === 3) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    if (parts.length === 2) {
+      return parts[0] * 60 + parts[1];
+    }
+    if (parts.length === 1) {
+      return parts[0];
+    }
+  }
+  return 0;
+}
+
 export default function VideoPlayer({
   video,
   relatedVideos = [],
@@ -91,7 +113,7 @@ export default function VideoPlayer({
   const [isPlaying, setIsPlaying] = useState(true);
   const [isBuffering, setIsBuffering] = useState(() => !isVercelDeployment);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [duration, setDuration] = useState(() => parseDuration(video?.duration));
   const [volume, setVolume] = useState(100);
   const [isMuted, setIsMuted] = useState(false);
   const [isAudioBlocked, setIsAudioBlocked] = useState(false);
@@ -391,8 +413,10 @@ export default function VideoPlayer({
 
   // Seek relative (forward / backward seconds)
   const seekRelative = useCallback((seconds) => {
+    const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
     if (useEmbedFallback) {
-      const target = Math.max(0, Math.min(duration || 999999, currentTime + seconds));
+      const maxTime = targetDur || 999999;
+      const target = Math.max(0, Math.min(maxTime, currentTime + seconds));
       setCurrentTime(target);
       sendIframeCommand('seekTo', [target, true]);
       if (seconds < 0) {
@@ -409,7 +433,7 @@ export default function VideoPlayer({
 
     const activeEl = document.hidden && aud && !aud.paused ? aud : vid;
     const cur = activeEl.currentTime || 0;
-    const dur = activeEl.duration || duration || 0;
+    const dur = activeEl.duration || targetDur || 0;
     const target = Math.max(0, Math.min(dur || 999999, cur + seconds));
 
     vid.currentTime = target;
@@ -421,7 +445,7 @@ export default function VideoPlayer({
     } else {
       triggerRipple('right');
     }
-  }, [useEmbedFallback, duration, currentTime, sendIframeCommand, triggerRipple]);
+  }, [useEmbedFallback, duration, currentTime, video?.duration, sendIframeCommand, triggerRipple]);
 
   // Native HTML5 <video> Event Handlers
   const handleVideoPlay = () => {
@@ -501,15 +525,25 @@ export default function VideoPlayer({
     let syncInterval;
     if (isPlaying) {
       syncInterval = setInterval(() => {
+        try {
+          if (iframeRef.current && iframeRef.current.contentWindow) {
+            iframeRef.current.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'addEventListener', args: ['infoDelivery'] }),
+              '*'
+            );
+          }
+        } catch (_) {}
+
         setCurrentTime((prev) => {
-          if (duration > 0 && prev >= duration) {
+          const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
+          if (targetDur > 0 && prev >= targetDur) {
             if (isLooping) {
               sendIframeCommand('seekTo', [0, true]);
               sendIframeCommand('playVideo');
               return 0;
             }
             handleVideoEnded();
-            return duration;
+            return targetDur;
           }
           return prev + 1;
         });
@@ -519,19 +553,22 @@ export default function VideoPlayer({
     const handleWindowMessage = (e) => {
       try {
         const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
-        if (data && data.event === 'infoDelivery' && data.info) {
-          if (typeof data.info.currentTime === 'number') {
-            setCurrentTime(data.info.currentTime);
+        if (!data) return;
+
+        const info = data.info || (typeof data.data === 'object' ? data.data : null);
+        if (info && typeof info === 'object') {
+          if (typeof info.currentTime === 'number' && !isNaN(info.currentTime)) {
+            setCurrentTime(info.currentTime);
           }
-          if (typeof data.info.duration === 'number' && data.info.duration > 0) {
-            setDuration(data.info.duration);
+          if (typeof info.duration === 'number' && info.duration > 0) {
+            setDuration(info.duration);
           }
-          if (data.info.playerState === 1) {
+          if (info.playerState === 1) {
             setIsPlaying(true);
             setIsBuffering(false);
-          } else if (data.info.playerState === 2) {
+          } else if (info.playerState === 2) {
             setIsPlaying(false);
-          } else if (data.info.playerState === 0) {
+          } else if (info.playerState === 0) {
             if (isLooping) {
               sendIframeCommand('seekTo', [0, true]);
               sendIframeCommand('playVideo');
@@ -548,12 +585,21 @@ export default function VideoPlayer({
       clearInterval(syncInterval);
       window.removeEventListener('message', handleWindowMessage);
     };
-  }, [useEmbedFallback, isPlaying, duration, isLooping, handleVideoEnded, sendIframeCommand]);
+  }, [useEmbedFallback, isPlaying, duration, video?.duration, isLooping, handleVideoEnded, sendIframeCommand]);
+
+  // Sync duration whenever video prop updates (from route change or async details fetch)
+  useEffect(() => {
+    const parsedDur = parseDuration(video?.duration);
+    if (parsedDur > 0) {
+      setDuration((prev) => (prev > 0 ? prev : parsedDur));
+    }
+  }, [video?.duration]);
 
   // Switch video stream on video change - Strictly Unmuted by default
   useEffect(() => {
     setCurrentTime(0);
-    setDuration(0);
+    const parsedDur = parseDuration(video?.duration);
+    setDuration(parsedDur);
     setIsBuffering(!isVercelDeployment);
     setIsPlaying(true);
     setStreamError(false);
@@ -883,11 +929,12 @@ export default function VideoPlayer({
 
   // Seek on scrubber
   const handleScrub = (e) => {
-    if (!progressTrackRef.current || !duration) return;
+    const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
+    if (!progressTrackRef.current || !targetDur) return;
     const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
     const rect = progressTrackRef.current.getBoundingClientRect();
     const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    const targetTime = pos * duration;
+    const targetTime = pos * targetDur;
     setCurrentTime(targetTime);
     if (useEmbedFallback) {
       sendIframeCommand('seekTo', [targetTime, true]);
@@ -898,11 +945,12 @@ export default function VideoPlayer({
   };
 
   const handleProgressHover = (e) => {
-    if (!progressTrackRef.current || !duration) return;
+    const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
+    if (!progressTrackRef.current || !targetDur) return;
     const rect = progressTrackRef.current.getBoundingClientRect();
     const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     setHoverPosition(pos * 100);
-    setHoverTime(pos * duration);
+    setHoverTime(pos * targetDur);
   };
 
   // Volume: Controls audio stream with instant un-mute restoration
@@ -1080,7 +1128,8 @@ export default function VideoPlayer({
     onNotify(`${speed}x speed`);
   };
 
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const effectiveDuration = duration > 0 ? duration : parseDuration(video?.duration);
+  const progressPercent = effectiveDuration > 0 ? Math.min(100, (currentTime / effectiveDuration) * 100) : 0;
 
   return (
     <div className={`watch-page ${isTheater ? 'theater-layout' : ''}`}>
@@ -1105,6 +1154,16 @@ export default function VideoPlayer({
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
                   title={video.title || 'Video Player'}
+                  onLoad={() => {
+                    try {
+                      if (iframeRef.current && iframeRef.current.contentWindow) {
+                        iframeRef.current.contentWindow.postMessage(JSON.stringify({ event: 'listening' }), '*');
+                        iframeRef.current.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'addEventListener', args: ['onReady'] }), '*');
+                        iframeRef.current.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'addEventListener', args: ['onStateChange'] }), '*');
+                        iframeRef.current.contentWindow.postMessage(JSON.stringify({ event: 'command', func: 'addEventListener', args: ['infoDelivery'] }), '*');
+                      }
+                    } catch (_) {}
+                  }}
                 />
               </div>
             ) : (
@@ -1369,7 +1428,7 @@ export default function VideoPlayer({
                 <div className="yt-time-display">
                   <span>{formatTime(currentTime)}</span>
                   <span className="yt-time-sep">/</span>
-                  <span>{formatTime(duration)}</span>
+                  <span>{effectiveDuration > 0 ? formatTime(effectiveDuration) : (video?.duration || '0:00')}</span>
                 </div>
               </div>
 
