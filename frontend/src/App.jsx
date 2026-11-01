@@ -547,6 +547,26 @@ export default function App() {
     }
   }, []);
 
+  // Load Watch History (Strictly for authenticated user)
+  const loadHistory = useCallback(async () => {
+    const token = localStorage.getItem('bintube_token');
+    if (!token) {
+      setHistoryVideos([]);
+      return;
+    }
+    try {
+      const res = await fetch(apiUrl('/api/history'), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setHistoryVideos(data.videos || []);
+      }
+    } catch (err) {
+      console.error('Failed to load history from server:', err);
+    }
+  }, []);
+
   // Refresh page collections whenever activePage changes
   useEffect(() => {
     if (activePage === 'watch-later') {

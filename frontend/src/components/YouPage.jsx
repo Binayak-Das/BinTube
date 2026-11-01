@@ -27,17 +27,12 @@ export default function YouPage({
   const userInitial = currentUser?.username
     ? currentUser.username.charAt(0).toUpperCase()
     : currentUser?.name
-    ? currentUser.name.charAt(0).toUpperCase()
-    : currentUser?.email
-    ? currentUser.email.charAt(0).toUpperCase()
-    : null;
+      ? currentUser.name.charAt(0).toUpperCase()
+      : currentUser?.email
+        ? currentUser.email.charAt(0).toUpperCase()
+        : null;
 
   const displayName = currentUser?.name || currentUser?.username || 'User';
-  const handleText = currentUser?.username
-    ? `@${currentUser.username}`
-    : currentUser?.email
-    ? currentUser.email.split('@')[0]
-    : '';
 
   const handleShortcutClick = (targetPage) => {
     if (['history', 'watch-later', 'liked', 'playlists'].includes(targetPage) && !currentUser) {
@@ -68,10 +63,8 @@ export default function YouPage({
             <div className="you-profile-info">
               <h1 className="you-profile-name">{displayName}</h1>
               <div className="you-profile-meta">
-                {handleText && <span className="you-handle">{handleText}</span>}
                 {currentUser.email && (
                   <>
-                    <span className="you-dot">•</span>
                     <span className="you-email">{currentUser.email}</span>
                   </>
                 )}
@@ -208,57 +201,8 @@ export default function YouPage({
 
       {/* Main Shortcuts Menu Rows */}
       <section className="you-shortcuts-section">
-        <h2 className="you-shortcuts-heading">Your Library & Shortcuts</h2>
+        <h2 className="you-shortcuts-heading">Shortcuts</h2>
         <div className="you-shortcuts-list">
-          {/* History */}
-          <button
-            type="button"
-            className="you-shortcut-row"
-            onClick={() => handleShortcutClick('history')}
-          >
-            <div className="you-shortcut-left">
-              <div className="you-shortcut-icon-box">
-                <HistoryIcon size={22} />
-              </div>
-              <div className="you-shortcut-text-box">
-                <span className="you-shortcut-label">History</span>
-                <span className="you-shortcut-sub">
-                  {currentUser ? `${historyVideos.length} videos` : 'Sign in to view'}
-                </span>
-              </div>
-            </div>
-            <div className="you-shortcut-right">
-              {currentUser && historyVideos.length > 0 && (
-                <span className="you-count-pill">{historyVideos.length}</span>
-              )}
-              <span className="you-shortcut-chevron">›</span>
-            </div>
-          </button>
-
-          {/* Playlists */}
-          <button
-            type="button"
-            className="you-shortcut-row"
-            onClick={() => handleShortcutClick('playlists')}
-          >
-            <div className="you-shortcut-left">
-              <div className="you-shortcut-icon-box">
-                <PlaylistIcon size={22} />
-              </div>
-              <div className="you-shortcut-text-box">
-                <span className="you-shortcut-label">Playlists</span>
-                <span className="you-shortcut-sub">
-                  {currentUser ? `${playlists.length} playlists` : 'Sign in to view'}
-                </span>
-              </div>
-            </div>
-            <div className="you-shortcut-right">
-              {currentUser && playlists.length > 0 && (
-                <span className="you-count-pill">{playlists.length}</span>
-              )}
-              <span className="you-shortcut-chevron">›</span>
-            </div>
-          </button>
 
           {/* Watch Later */}
           <button

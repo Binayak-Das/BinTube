@@ -1214,6 +1214,7 @@ textarea {
   from {
     transform: translateY(100%);
   }
+
   to {
     transform: translateY(0);
   }
@@ -7529,7 +7530,8 @@ textarea {
 .you-profile-content {
   display: flex;
   align-items: center;
-  gap: 18px;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .you-avatar-box {
@@ -7554,6 +7556,7 @@ textarea {
 .you-profile-info {
   flex: 1;
   display: flex;
+  align-items: center;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
