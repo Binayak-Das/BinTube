@@ -4,6 +4,8 @@ import {
   ShareIcon,
   CommentIcon,
   CloseIcon,
+  VolumeHighIcon,
+  VolumeMuteIcon,
 } from './Icons.jsx';
 import CommentsSection from './CommentsSection.jsx';
 import { apiUrl } from '../config/api.js';
@@ -25,9 +27,6 @@ export default function ShortsPage({
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
   const [showComments, setShowComments] = useState(false);
-  const [autoAdvance, setAutoAdvance] = useState(
-    () => localStorage.getItem('shorts_autoadvance') === 'true'
-  );
 
   const viewportRef = useRef(null);
   const reelRefs = useRef([]);
@@ -146,7 +145,7 @@ export default function ShortsPage({
         }
       }
     });
-  }, [activeIdx, isPlaying, isMuted]);
+  }, [activeIdx, isPlaying, isMuted, shorts]);
 
   // Document gesture listener to ensure unmuted audio plays on first user tap/key/touch
   useEffect(() => {
@@ -173,7 +172,7 @@ export default function ShortsPage({
       window.removeEventListener('click', unlockShortAudioOnGesture);
       window.removeEventListener('keydown', unlockShortAudioOnGesture);
     };
-  }, [activeIdx, isPlaying, isMuted]);
+  }, [activeIdx, isPlaying, isMuted, shorts]);
 
   // Seamless Background Play Engine for Shorts:
   // When switching tabs or minimizing, audio continues and video resyncs on foreground return
@@ -211,7 +210,7 @@ export default function ShortsPage({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [activeIdx, isPlaying, isMuted]);
+  }, [activeIdx, isPlaying, isMuted, shorts]);
 
   // Scroll to previous / next reel
   const scrollToReel = useCallback((index) => {
@@ -303,12 +302,7 @@ export default function ShortsPage({
 
           // Format clean likes count (displaying actual like count, strictly NEVER the word "views")
           const rawLikes = short.likes ? String(short.likes) : '';
-          const rawViews = short.views ? String(short.views) : '';
-          const displayLikes = rawLikes
-            ? rawLikes.replace(/\s*views?/gi, '').trim()
-            : rawViews
-            ? rawViews.replace(/\s*views?/gi, '').trim()
-            : 'Like';
+          const displayLikes = rawLikes ? rawLikes.replace(/\s*views?/gi, '').trim() : 'Like';
 
           return (
             <div
@@ -319,6 +313,19 @@ export default function ShortsPage({
             >
               {/* Centered Reel Card */}
               <div className="shorts-reel-card">
+                {/* Floating Sound Toggle Button (Unmuted by default, quick one-click control) */}
+                <button
+                  type="button"
+                  className="shorts-sound-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMuted((prev) => !prev);
+                  }}
+                  title={isMuted ? 'Unmute audio' : 'Mute audio'}
+                >
+                  {isMuted ? <VolumeMuteIcon size={20} /> : <VolumeHighIcon size={20} />}
+                </button>
+
                 {/* Video Playback Container - Zero Overlays */}
                 <div
                   className="shorts-video-viewport"
@@ -338,10 +345,15 @@ export default function ShortsPage({
                         src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/stream`)}
                         poster={short.thumbnailUrl || `https://i.ytimg.com/vi/${sId}/hqdefault.jpg`}
                         autoPlay={isActive}
-                        loop={!autoAdvance}
+                        loop={true}
                         playsInline
-                        preload="metadata"
+                        preload="auto"
                         muted={true}
+                        onCanPlay={(e) => {
+                          if (isActive && isPlaying && e.target.paused) {
+                            e.target.play().catch(() => {});
+                          }
+                        }}
                         onTimeUpdate={(e) => {
                           const aud = audioRefs.current[idx];
                           if (aud && Math.abs(e.target.currentTime - aud.currentTime) > 0.25) {
@@ -353,16 +365,26 @@ export default function ShortsPage({
                           if (aud) aud.currentTime = e.target.currentTime;
                         }}
                         onEnded={() => {
-                          if (autoAdvance) {
-                            scrollToReel(idx + 1);
+                          // Play continuously in loop - strictly NO autoscrolling
+                          const vid = videoRefs.current[idx];
+                          const aud = audioRefs.current[idx];
+                          if (vid) {
+                            vid.currentTime = 0;
+                            vid.play().catch(() => {});
+                          }
+                          if (aud) {
+                            aud.currentTime = 0;
+                            aud.play().catch(() => {});
                           }
                         }}
                         onError={(e) => {
-                          // Resilient retry on transient stream error - never fall back to iframe
+                          const target = e.target;
                           setTimeout(() => {
-                            if (e.target && !e.target.paused) {
-                              e.target.load();
-                              e.target.play().catch(() => {});
+                            if (target) {
+                              target.load();
+                              if (isActive && isPlaying) {
+                                target.play().catch(() => {});
+                              }
                             }
                           }, 1000);
                         }}
@@ -370,12 +392,21 @@ export default function ShortsPage({
                       <audio
                         ref={(el) => (audioRefs.current[idx] = el)}
                         src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/audio`)}
-                        loop={!autoAdvance}
-                        preload="metadata"
+                        loop={true}
+                        preload="auto"
                         muted={isMuted}
+                        onCanPlay={(e) => {
+                          if (isActive && isPlaying && !isMuted && e.target.paused) {
+                            e.target.currentTime = videoRefs.current[idx]?.currentTime || 0;
+                            e.target.play().catch(() => {});
+                          }
+                        }}
                         onEnded={() => {
-                          if (autoAdvance) {
-                            scrollToReel(idx + 1);
+                          // Audio loop synchronization
+                          const aud = audioRefs.current[idx];
+                          if (aud) {
+                            aud.currentTime = 0;
+                            aud.play().catch(() => {});
                           }
                         }}
                       />

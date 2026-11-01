@@ -6,11 +6,14 @@ import {
   TrashIcon,
   ClockIcon,
   CheckIcon,
+  UserIcon,
 } from './Icons.jsx';
 import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function LikedVideosPage({
   videos = [],
+  currentUser = null,
+  onRequireAuth,
   onSelectVideo,
   onPlayPlaylist,
   onRemoveLike,
@@ -21,6 +24,28 @@ export default function LikedVideosPage({
   onOpenSaveToPlaylist,
   onNotify,
 }) {
+  if (!currentUser) {
+    return (
+      <div className="history-empty-state history-signed-out-state">
+        <div className="history-empty-icon-wrap">
+          <ThumbsUpIcon size={72} className="history-empty-icon" />
+        </div>
+        <h2 className="history-empty-title">Videos you like will show up here</h2>
+        <p className="history-empty-subtitle">
+          Sign in to access videos that you have liked across YouTube.
+        </p>
+        <button
+          type="button"
+          className="history-signin-btn"
+          onClick={onRequireAuth}
+          title="Sign in to view liked videos"
+        >
+          <UserIcon size={18} />
+          <span>Sign in</span>
+        </button>
+      </div>
+    );
+  }
   const hasVideos = videos && videos.length > 0;
   const leadVideo = hasVideos ? videos[0] : null;
   const leadVideoId = leadVideo?.videoId || leadVideo?._id;

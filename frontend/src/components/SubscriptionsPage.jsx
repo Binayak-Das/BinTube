@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import VideoCard from './VideoCard.jsx';
-import { SubscriptionsIcon, CheckIcon } from './Icons.jsx';
+import { SubscriptionsIcon, CheckIcon, UserIcon } from './Icons.jsx';
 import { apiUrl } from '../config/api.js';
 
 export default function SubscriptionsPage({
   subscribedChannels = [],
+  currentUser = null,
+  onRequireAuth,
   onToggleSubscribe,
   onSelectVideo,
   watchLaterIds = [],
@@ -13,6 +15,28 @@ export default function SubscriptionsPage({
   onOpenSaveToPlaylist,
   onNotify,
 }) {
+  if (!currentUser) {
+    return (
+      <div className="history-empty-state history-signed-out-state">
+        <div className="history-empty-icon-wrap">
+          <SubscriptionsIcon size={72} className="history-empty-icon" />
+        </div>
+        <h2 className="history-empty-title">Don't miss new videos</h2>
+        <p className="history-empty-subtitle">
+          Sign in to see updates from your favorite YouTube channels and access your subscriptions.
+        </p>
+        <button
+          type="button"
+          className="history-signin-btn"
+          onClick={onRequireAuth}
+          title="Sign in to view subscriptions"
+        >
+          <UserIcon size={18} />
+          <span>Sign in</span>
+        </button>
+      </div>
+    );
+  }
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'manage'
   const [activeChannelFilter, setActiveChannelFilter] = useState('All');
   const [subVideos, setSubVideos] = useState([]);

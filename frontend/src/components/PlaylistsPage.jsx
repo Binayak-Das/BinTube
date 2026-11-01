@@ -8,11 +8,14 @@ import {
   ClockIcon,
   ArrowLeftIcon,
   CheckIcon,
+  UserIcon,
 } from './Icons.jsx';
 import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function PlaylistsPage({
   playlists = [],
+  currentUser = null,
+  onRequireAuth,
   onCreatePlaylist,
   onDeletePlaylist,
   onRemoveVideoFromPlaylist,
@@ -24,6 +27,28 @@ export default function PlaylistsPage({
   onOpenSaveToPlaylist,
   onNotify,
 }) {
+  if (!currentUser) {
+    return (
+      <div className="history-empty-state history-signed-out-state">
+        <div className="history-empty-icon-wrap">
+          <PlaylistIcon size={72} className="history-empty-icon" />
+        </div>
+        <h2 className="history-empty-title">Enjoy your favorite playlists</h2>
+        <p className="history-empty-subtitle">
+          Sign in to create, organize and access your playlists on YouTube.
+        </p>
+        <button
+          type="button"
+          className="history-signin-btn"
+          onClick={onRequireAuth}
+          title="Sign in to view playlists"
+        >
+          <UserIcon size={18} />
+          <span>Sign in</span>
+        </button>
+      </div>
+    );
+  }
   const [activePlaylistId, setActivePlaylistId] = useState(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');

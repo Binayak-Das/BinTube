@@ -1,10 +1,12 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { PlayIcon, TrashIcon, ClockIcon } from './Icons.jsx';
+import { PlayIcon, TrashIcon, ClockIcon, UserIcon } from './Icons.jsx';
 import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function WatchLaterPage({
   videos = [],
+  currentUser = null,
+  onRequireAuth,
   onSelectVideo,
   onPlayPlaylist,
   onRemoveVideo,
@@ -15,6 +17,28 @@ export default function WatchLaterPage({
   onOpenSaveToPlaylist,
   onNotify,
 }) {
+  if (!currentUser) {
+    return (
+      <div className="history-empty-state history-signed-out-state">
+        <div className="history-empty-icon-wrap">
+          <ClockIcon size={72} className="history-empty-icon" />
+        </div>
+        <h2 className="history-empty-title">Save videos to watch later</h2>
+        <p className="history-empty-subtitle">
+          Sign in to view videos you&rsquo;ve saved to watch later and organize your watchlist.
+        </p>
+        <button
+          type="button"
+          className="history-signin-btn"
+          onClick={onRequireAuth}
+          title="Sign in to view Watch Later"
+        >
+          <UserIcon size={18} />
+          <span>Sign in</span>
+        </button>
+      </div>
+    );
+  }
   if (videos.length === 0) {
     return (
       <div className="empty-state">

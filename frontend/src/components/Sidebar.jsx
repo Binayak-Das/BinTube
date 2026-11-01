@@ -27,6 +27,8 @@ export default function Sidebar({
   subscriptionsCount = 0,
   playlistsCount = 0,
   historyCount = 0,
+  currentUser = null,
+  onRequireAuth,
 }) {
   const categories = [
     { name: 'Music', label: 'Music' },
@@ -48,6 +50,24 @@ export default function Sidebar({
     if (isOverlay && onClose) {
       onClose();
     }
+  };
+
+  const handleRestrictedLinkClick = (e, pageKey, label) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      if (isOverlay && onClose) onClose();
+      return;
+    }
+    if (!currentUser) {
+      e.preventDefault();
+      if (isOverlay && onClose) onClose();
+      if (typeof onRequireAuth === 'function') {
+        onRequireAuth(`access your ${label}`);
+      }
+      return;
+    }
+    handleLinkClick(e, () => {
+      onNavigate(pageKey);
+    });
   };
 
   return (
@@ -144,9 +164,7 @@ export default function Sidebar({
             className={`sidebar-item ${activePage === 'subscriptions' ? 'active' : ''
               }`}
             onClick={(e) =>
-              handleLinkClick(e, () => {
-                onNavigate('subscriptions');
-              })
+              handleRestrictedLinkClick(e, 'subscriptions', 'subscriptions')
             }
           >
             <SubscriptionsIcon size={20} />
@@ -158,9 +176,7 @@ export default function Sidebar({
             className={`sidebar-item ${activePage === 'history' ? 'active' : ''
               }`}
             onClick={(e) =>
-              handleLinkClick(e, () => {
-                onNavigate('history');
-              })
+              handleRestrictedLinkClick(e, 'history', 'watch history')
             }
           >
             <HistoryIcon size={20} />
@@ -172,9 +188,7 @@ export default function Sidebar({
             className={`sidebar-item ${activePage === 'liked' ? 'active' : ''
               }`}
             onClick={(e) =>
-              handleLinkClick(e, () => {
-                onNavigate('liked');
-              })
+              handleRestrictedLinkClick(e, 'liked', 'liked videos')
             }
           >
             <ThumbsUpIcon size={19} filled={activePage === 'liked'} />
@@ -186,9 +200,7 @@ export default function Sidebar({
             className={`sidebar-item ${activePage === 'watch-later' ? 'active' : ''
               }`}
             onClick={(e) =>
-              handleLinkClick(e, () => {
-                onNavigate('watch-later');
-              })
+              handleRestrictedLinkClick(e, 'watch-later', 'Watch Later')
             }
           >
             <ClockIcon size={20} />
@@ -200,9 +212,7 @@ export default function Sidebar({
             className={`sidebar-item ${activePage === 'playlists' ? 'active' : ''
               }`}
             onClick={(e) =>
-              handleLinkClick(e, () => {
-                onNavigate('playlists');
-              })
+              handleRestrictedLinkClick(e, 'playlists', 'playlists')
             }
           >
             <PlaylistIcon size={20} />

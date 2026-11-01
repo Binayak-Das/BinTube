@@ -432,6 +432,21 @@ export default function App() {
     }
   }, [category, searchQuery, activePage, fetchVideos]);
 
+  // Resume / retry in-flight fetches if user switched tabs before home/search loading completed
+  useEffect(() => {
+    const handleVisibilityRefresh = () => {
+      if (!document.hidden) {
+        if (videos.length === 0 && (activePage === 'home' || activePage === 'search')) {
+          setLoading(true);
+          if (activePage === 'home') setIsHomeReady(false);
+          fetchVideos(1, true);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityRefresh);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityRefresh);
+  }, [videos.length, activePage, fetchVideos]);
+
   // Infinite Scroll IntersectionObserver
   useEffect(() => {
     if (activePage !== 'home' && activePage !== 'search') return;
@@ -1128,6 +1143,8 @@ export default function App() {
             subscriptionsCount={subscribedChannels.length}
             playlistsCount={playlists.length}
             historyCount={user ? historyVideos.length : 0}
+            currentUser={user}
+            onRequireAuth={requireAuth}
           />
         )}
 
@@ -1145,6 +1162,8 @@ export default function App() {
           subscriptionsCount={subscribedChannels.length}
           playlistsCount={playlists.length}
           historyCount={user ? historyVideos.length : 0}
+          currentUser={user}
+          onRequireAuth={requireAuth}
         />
 
         {/* Main Content Area */}
@@ -1382,10 +1401,12 @@ export default function App() {
             />
           )}
 
-          {/* DEDICATED WATCH LATER PAGE */}
+          {/* DEDICATED WATCH LATER PAGE (Restricted to logged-in users) */}
           {activePage === 'watch-later' && (
             <WatchLaterPage
               videos={watchLaterVideos}
+              currentUser={user}
+              onRequireAuth={() => requireAuth('access Watch Later')}
               onSelectVideo={handleSelectVideo}
               onPlayPlaylist={handlePlayPlaylist}
               onRemoveVideo={handleRemoveWatchLater}
@@ -1402,10 +1423,12 @@ export default function App() {
             />
           )}
 
-          {/* DEDICATED SUBSCRIPTIONS PAGE */}
+          {/* DEDICATED SUBSCRIPTIONS PAGE (Restricted to logged-in users) */}
           {activePage === 'subscriptions' && (
             <SubscriptionsPage
               subscribedChannels={subscribedChannels}
+              currentUser={user}
+              onRequireAuth={() => requireAuth('access subscriptions')}
               onToggleSubscribe={handleToggleSubscribe}
               onSelectVideo={handleSelectVideo}
               watchLaterIds={watchLaterIds}
@@ -1420,10 +1443,12 @@ export default function App() {
             />
           )}
 
-          {/* DEDICATED LIKED VIDEOS PAGE */}
+          {/* DEDICATED LIKED VIDEOS PAGE (Restricted to logged-in users) */}
           {activePage === 'liked' && (
             <LikedVideosPage
               videos={likedVideos}
+              currentUser={user}
+              onRequireAuth={() => requireAuth('access liked videos')}
               onSelectVideo={handleSelectVideo}
               onPlayPlaylist={handlePlayPlaylist}
               onRemoveLike={handleRemoveLike}
@@ -1440,10 +1465,12 @@ export default function App() {
             />
           )}
 
-          {/* DEDICATED PLAYLISTS PAGE */}
+          {/* DEDICATED PLAYLISTS PAGE (Restricted to logged-in users) */}
           {activePage === 'playlists' && (
             <PlaylistsPage
               playlists={playlists}
+              currentUser={user}
+              onRequireAuth={() => requireAuth('access your playlists')}
               onCreatePlaylist={handleCreatePlaylist}
               onDeletePlaylist={handleDeletePlaylist}
               onRemoveVideoFromPlaylist={handleRemoveVideoFromPlaylist}

@@ -1,5 +1,5 @@
 import express from 'express';
-import { Readable } from 'stream';
+import { Readable, pipeline } from 'stream';
 import { Ytdl, Client } from '@distube/ytdl-core';
 import {
   fetchYouTubeVideos,
@@ -8,7 +8,7 @@ import {
 } from '../services/youtube.js';
 
 const router = express.Router();
-const ytdl = new Ytdl({ clients: [Client.Mweb, Client.WebEmbedded, Client.Tv] });
+const ytdl = new Ytdl({ clients: [Client.Mweb, Client.WebEmbedded, Client.Tv, Client.VisionOS] });
 
 // Anti-caching middleware so every page refresh receives fresh randomized videos
 router.use((req, res, next) => {
@@ -499,16 +499,25 @@ router.get('/:id/download', async (req, res) => {
   }
 });
 
-// In-memory cache for resolved format stream URLs (3-hour TTL)
+// In-memory cache for resolved format stream URLs (45-minute safe TTL)
 const streamUrlCache = new Map(); // id -> { videoUrl, audioUrl, expiresAt }
 
-async function resolveVideoFormats(id) {
-  const cached = streamUrlCache.get(id);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached;
+async function resolveVideoFormats(id, forceRefresh = false) {
+  if (!forceRefresh) {
+    const cached = streamUrlCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached;
+    }
   }
 
-  const info = await ytdl.getInfo(id);
+  let info;
+  try {
+    info = await ytdl.getInfo(id);
+  } catch (err) {
+    console.warn(`ytdl getInfo failed for ${id}: ${err.message}. Retrying with alternate client...`);
+    const fallbackYtdl = new Ytdl({ clients: [Client.Tv, Client.WebEmbedded] });
+    info = await fallbackYtdl.getInfo(id);
+  }
 
   // 1. Check if a pre-muxed combined format with height >= 720 exists
   const combined720 = info.formats.find(
@@ -521,23 +530,29 @@ async function resolveVideoFormats(id) {
       videoType: combined720.mimeType?.split(';')?.[0] || 'video/mp4',
       audioType: combined720.mimeType?.split(';')?.[0] || 'audio/mp4',
       hasAudio: true,
-      expiresAt: Date.now() + 3 * 3600 * 1000,
+      expiresAt: Date.now() + 45 * 60 * 1000,
     };
     streamUrlCache.set(id, result);
     return result;
   }
 
-  // 2. Select high-definition MP4 video stream (at least 720p: 720p or 1080p)
+  // 2. Select high-definition MP4 video stream (universal H.264 / AVC 'avc1' at least 720p)
+  // Strictly filter out AV1 ('av01') which fails on many browsers without hardware extension
   const mp4Videos = info.formats
+    .filter((f) => f.hasVideo && f.container === 'mp4' && f.url && !f.codecs?.toLowerCase().includes('av01'))
+    .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+  const allMp4s = info.formats
     .filter((f) => f.hasVideo && f.container === 'mp4' && f.url)
     .sort((a, b) => (b.height || 0) - (a.height || 0));
 
-  // Prioritize 720p or 1080p, otherwise highest available
+  const candidatePool = mp4Videos.length > 0 ? mp4Videos : allMp4s;
+
   const videoFormat =
-    mp4Videos.find((f) => f.height === 720) ||
-    mp4Videos.find((f) => f.height === 1080) ||
-    mp4Videos.find((f) => f.height >= 720) ||
-    mp4Videos[0] ||
+    candidatePool.find((f) => f.height === 720) ||
+    candidatePool.find((f) => f.height === 1080) ||
+    candidatePool.find((f) => f.height >= 720) ||
+    candidatePool[0] ||
     info.formats.find((f) => f.hasVideo && f.url);
 
   // 3. Select best high-fidelity audio format (e.g. 128kbps AAC / itag 140 m4a)
@@ -546,7 +561,7 @@ async function resolveVideoFormats(id) {
     .sort((a, b) => (b.audioBitrate || b.bitrate || 0) - (a.audioBitrate || a.bitrate || 0));
 
   const audioFormat =
-    audioFormats.find((f) => f.container === 'mp4' || f.container === 'm4a') ||
+    audioFormats.find((f) => f.container === 'mp4' || f.container === 'm4a' || f.codecs?.toLowerCase().includes('mp4a')) ||
     audioFormats[0] ||
     info.formats.find((f) => f.hasAudio && f.url) ||
     videoFormat;
@@ -557,10 +572,12 @@ async function resolveVideoFormats(id) {
     videoType: videoFormat?.mimeType?.split(';')?.[0] || 'video/mp4',
     audioType: audioFormat?.mimeType?.split(';')?.[0] || 'audio/mp4',
     hasAudio: Boolean(videoFormat?.hasAudio),
-    expiresAt: Date.now() + 3 * 3600 * 1000,
+    expiresAt: Date.now() + 45 * 60 * 1000,
   };
 
-  streamUrlCache.set(id, result);
+  if (result.videoUrl) {
+    streamUrlCache.set(id, result);
+  }
   return result;
 }
 
@@ -568,10 +585,11 @@ async function resolveVideoFormats(id) {
 router.get('/:id/stream', async (req, res) => {
   const { id } = req.params;
   const rangeHeader = req.headers.range;
+  const isBypassCache = Boolean(req.query.retry || req.query.manual || req.query.t);
 
   try {
-    const { videoUrl, videoType } = await resolveVideoFormats(id);
-    if (!videoUrl) {
+    let formats = await resolveVideoFormats(id, isBypassCache);
+    if (!formats?.videoUrl) {
       return res.status(404).json({ message: 'No playable video stream found' });
     }
 
@@ -583,12 +601,30 @@ router.get('/:id/stream', async (req, res) => {
       forwardHeaders['Range'] = rangeHeader;
     }
 
-    const upstream = await fetch(videoUrl, { headers: forwardHeaders });
+    let upstream = await fetch(formats.videoUrl, { headers: forwardHeaders });
+
+    // If upstream returned 403 Forbidden or 410 Gone (stale/expired CDN token), refresh fresh format immediately
+    if (!upstream.ok && (upstream.status === 403 || upstream.status === 410 || upstream.status === 404)) {
+      console.warn(`Upstream returned ${upstream.status} for video ${id}. Refreshing fresh format token...`);
+      streamUrlCache.delete(id);
+      formats = await resolveVideoFormats(id, true);
+      if (formats?.videoUrl) {
+        upstream = await fetch(formats.videoUrl, { headers: forwardHeaders });
+      }
+    }
+
+    if (!upstream.ok) {
+      console.error(`Upstream error ${upstream.status} for video ${id}`);
+      if (!res.headersSent) {
+        return res.status(upstream.status).json({ message: `Upstream error ${upstream.status}` });
+      }
+      return;
+    }
 
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
-    res.setHeader('Content-Type', upstream.headers.get('content-type') || videoType || 'video/mp4');
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || formats.videoType || 'video/mp4');
 
     if (upstream.status === 206) {
       res.status(206);
@@ -603,18 +639,12 @@ router.get('/:id/stream', async (req, res) => {
     }
 
     const nodeStream = Readable.fromWeb(upstream.body);
-    nodeStream.on('error', () => {
-      // Gracefully handle client abort / pipeline disconnect without crashing server
-    });
-    nodeStream.pipe(res);
-
-    req.on('close', () => {
-      try {
-        nodeStream.destroy();
-      } catch (_) {}
+    pipeline(nodeStream, res, (err) => {
+      // Gracefully handle client abort, range slice completion or disconnect without crashing
     });
   } catch (err) {
     console.error(`Stream error for video ${id}:`, err.message);
+    streamUrlCache.delete(id);
     if (!res.headersSent) {
       res.status(500).json({ message: 'Error streaming video', error: err.message });
     }
@@ -625,10 +655,11 @@ router.get('/:id/stream', async (req, res) => {
 router.get('/:id/audio', async (req, res) => {
   const { id } = req.params;
   const rangeHeader = req.headers.range;
+  const isBypassCache = Boolean(req.query.retry || req.query.manual || req.query.t);
 
   try {
-    const { audioUrl, audioType } = await resolveVideoFormats(id);
-    if (!audioUrl) {
+    let formats = await resolveVideoFormats(id, isBypassCache);
+    if (!formats?.audioUrl) {
       return res.status(404).json({ message: 'No playable audio stream found' });
     }
 
@@ -640,12 +671,30 @@ router.get('/:id/audio', async (req, res) => {
       forwardHeaders['Range'] = rangeHeader;
     }
 
-    const upstream = await fetch(audioUrl, { headers: forwardHeaders });
+    let upstream = await fetch(formats.audioUrl, { headers: forwardHeaders });
+
+    // If upstream returned 403 Forbidden or 410 Gone (stale/expired CDN token), refresh fresh format immediately
+    if (!upstream.ok && (upstream.status === 403 || upstream.status === 410 || upstream.status === 404)) {
+      console.warn(`Upstream audio returned ${upstream.status} for video ${id}. Refreshing fresh format token...`);
+      streamUrlCache.delete(id);
+      formats = await resolveVideoFormats(id, true);
+      if (formats?.audioUrl) {
+        upstream = await fetch(formats.audioUrl, { headers: forwardHeaders });
+      }
+    }
+
+    if (!upstream.ok) {
+      console.error(`Upstream audio error ${upstream.status} for video ${id}`);
+      if (!res.headersSent) {
+        return res.status(upstream.status).json({ message: `Upstream audio error ${upstream.status}` });
+      }
+      return;
+    }
 
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
-    res.setHeader('Content-Type', upstream.headers.get('content-type') || audioType || 'audio/mp4');
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || formats.audioType || 'audio/mp4');
 
     if (upstream.status === 206) {
       res.status(206);
@@ -660,18 +709,12 @@ router.get('/:id/audio', async (req, res) => {
     }
 
     const nodeStream = Readable.fromWeb(upstream.body);
-    nodeStream.on('error', () => {
-      // Gracefully handle client abort / pipeline disconnect without crashing server
-    });
-    nodeStream.pipe(res);
-
-    req.on('close', () => {
-      try {
-        nodeStream.destroy();
-      } catch (_) {}
+    pipeline(nodeStream, res, (err) => {
+      // Gracefully handle client abort, range slice completion or disconnect without crashing
     });
   } catch (err) {
     console.error(`Audio stream error for video ${id}:`, err.message);
+    streamUrlCache.delete(id);
     if (!res.headersSent) {
       res.status(500).json({ message: 'Error streaming audio', error: err.message });
     }

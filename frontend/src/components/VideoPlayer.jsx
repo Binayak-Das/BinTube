@@ -80,6 +80,7 @@ export default function VideoPlayer({
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(100);
   const [isMuted, setIsMuted] = useState(false);
+  const [isAudioBlocked, setIsAudioBlocked] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isTheater, setIsTheater] = useState(false);
   const [showControls, setShowControls] = useState(true);
@@ -121,16 +122,22 @@ export default function VideoPlayer({
   const [loadingMoreRelated, setLoadingMoreRelated] = useState(false);
   const [hasMoreRelated, setHasMoreRelated] = useState(true);
   const relatedSentinelRef = useRef(null);
+  const isFetchingMoreRef = useRef(false);
 
   const vId = video.videoId || video._id;
   const videoSrc = apiUrl(`/api/videos/${encodeURIComponent(vId)}/stream`);
   const audioSrc = apiUrl(`/api/videos/${encodeURIComponent(vId)}/audio`);
+
+  // Track user scroll before loading secondary batches of related videos
+  const [userHasScrolled, setUserHasScrolled] = useState(false);
 
   useEffect(() => {
     setExtraRelated([]);
     setRelatedPage(1);
     setLoadingMoreRelated(false);
     setHasMoreRelated(true);
+    setUserHasScrolled(false);
+    isFetchingMoreRef.current = false;
   }, [vId]);
 
   const allRelatedVideos = [...relatedVideos, ...extraRelated];
@@ -151,7 +158,8 @@ export default function VideoPlayer({
 
   // Fetch more related videos on page scroll with UNLIMITED endless loading
   const fetchMoreRelated = useCallback(async () => {
-    if (loadingMoreRelated) return;
+    if (isFetchingMoreRef.current || loadingMoreRelated) return;
+    isFetchingMoreRef.current = true;
     setLoadingMoreRelated(true);
     try {
       const currentVId = video.videoId || video._id;
@@ -197,40 +205,39 @@ export default function VideoPlayer({
       console.warn('Error loading more related videos:', err);
     } finally {
       setLoadingMoreRelated(false);
+      isFetchingMoreRef.current = false;
     }
   }, [loadingMoreRelated, relatedPage, video, relatedVideos, extraRelated]);
 
-  // Track user scroll before loading secondary batches of related videos
-  const [userHasScrolled, setUserHasScrolled] = useState(false);
-
   useEffect(() => {
     const handlePageScroll = () => {
-      if (window.scrollY > 100) {
+      // User must scroll down past the initial viewport to indicate intent to view more
+      if (window.scrollY > 250) {
         setUserHasScrolled(true);
       }
     };
     window.addEventListener('scroll', handlePageScroll, { passive: true });
-    return () => window.removeEventListener('handlePageScroll', handlePageScroll);
-  }, []);
+    return () => window.removeEventListener('scroll', handlePageScroll);
+  }, [vId]);
 
   useEffect(() => {
-    // Strictly wait until user has scrolled down before loading subsequent batches
-    if (!userHasScrolled) return;
+    // Strictly wait until user has scrolled down and first batch is loaded before observing sentinel
+    if (!userHasScrolled || allRelatedVideos.length === 0) return;
     const sentinel = relatedSentinelRef.current;
     if (!sentinel) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) {
+        if (entries[0].isIntersecting && !isFetchingMoreRef.current) {
           fetchMoreRelated();
         }
       },
-      { rootMargin: '80px' }
+      { rootMargin: '100px' }
     );
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [userHasScrolled, fetchMoreRelated]);
+  }, [userHasScrolled, allRelatedVideos.length, fetchMoreRelated]);
 
   // Screen Wake Lock API to prevent phone / PC display sleep while playing in foreground
   const requestWakeLock = useCallback(async () => {
@@ -447,17 +454,31 @@ export default function VideoPlayer({
 
   const streamRetryRef = useRef(0);
   const handleVideoError = () => {
-    setIsBuffering(false);
-    if (streamRetryRef.current < 3) {
-      streamRetryRef.current += 1;
+    if (streamRetryRef.current < 4) {
+      const retryCount = streamRetryRef.current + 1;
+      streamRetryRef.current = retryCount;
+      setIsBuffering(true);
       setTimeout(() => {
+        const savedTime = videoRef.current?.currentTime || currentTime || 0;
+        const separator = videoSrc.includes('?') ? '&' : '?';
+        const cacheBust = `${separator}retry=${retryCount}&t=${Date.now()}`;
         if (videoRef.current) {
+          videoRef.current.src = `${videoSrc}${cacheBust}`;
           videoRef.current.load();
+          videoRef.current.currentTime = savedTime;
           videoRef.current.play().catch(() => {});
         }
-      }, 1000);
+        if (bgAudioRef.current) {
+          const aSep = audioSrc.includes('?') ? '&' : '?';
+          bgAudioRef.current.src = `${audioSrc}${aSep}retry=${retryCount}&t=${Date.now()}`;
+          bgAudioRef.current.load();
+          bgAudioRef.current.currentTime = savedTime;
+          bgAudioRef.current.play().catch(() => {});
+        }
+      }, 1000 * retryCount);
       return;
     }
+    setIsBuffering(false);
     setStreamError(true);
   };
 
@@ -470,6 +491,7 @@ export default function VideoPlayer({
     setStreamError(false);
     streamRetryRef.current = 0;
     setIsMuted(false);
+    setIsAudioBlocked(false);
     setVolume(100);
     shouldBePlayingRef.current = true;
 
@@ -486,7 +508,11 @@ export default function VideoPlayer({
       bgAudioRef.current.muted = false;
       bgAudioRef.current.playbackRate = playbackSpeed;
       if (shouldBePlayingRef.current) {
-        bgAudioRef.current.play().catch(() => { });
+        bgAudioRef.current.play().catch((err) => {
+          if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+            setIsAudioBlocked(true);
+          }
+        });
       }
     }
   }, [vId]);
@@ -494,6 +520,7 @@ export default function VideoPlayer({
   // Document-level user gesture unlocker for unmuted audio
   useEffect(() => {
     const unlockAudioOnGesture = () => {
+      setIsAudioBlocked(false);
       const aud = bgAudioRef.current;
       if (aud && shouldBePlayingRef.current && !isMuted && aud.paused) {
         aud.muted = false;
@@ -971,6 +998,7 @@ export default function VideoPlayer({
               webkit-playsinline="true"
               x-webkit-airplay="allow"
               preload="auto"
+              muted={true}
               loop={isLooping}
               onPlay={handleVideoPlay}
               onPause={handleVideoPause}
@@ -999,9 +1027,19 @@ export default function VideoPlayer({
                     setStreamError(false);
                     streamRetryRef.current = 0;
                     setIsBuffering(true);
+                    const savedTime = currentTime || 0;
+                    const cacheBust = `?manual=${Date.now()}`;
                     if (videoRef.current) {
+                      videoRef.current.src = `${videoSrc}${cacheBust}`;
                       videoRef.current.load();
+                      videoRef.current.currentTime = savedTime;
                       videoRef.current.play().catch(() => {});
+                    }
+                    if (bgAudioRef.current) {
+                      bgAudioRef.current.src = `${audioSrc}${cacheBust}`;
+                      bgAudioRef.current.load();
+                      bgAudioRef.current.currentTime = savedTime;
+                      bgAudioRef.current.play().catch(() => {});
                     }
                   }}
                 >
@@ -1017,6 +1055,17 @@ export default function VideoPlayer({
               preload="auto"
               playsInline
               loop={isLooping}
+              onCanPlay={() => {
+                if (shouldBePlayingRef.current && !isMuted && bgAudioRef.current?.paused) {
+                  bgAudioRef.current.volume = volume / 100;
+                  bgAudioRef.current.currentTime = videoRef.current?.currentTime || 0;
+                  bgAudioRef.current.play().catch((err) => {
+                    if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+                      setIsAudioBlocked(true);
+                    }
+                  });
+                }
+              }}
               onTimeUpdate={handleAudioTimeUpdate}
               onEnded={handleVideoEnded}
             />
@@ -1028,6 +1077,29 @@ export default function VideoPlayer({
               </div>
             )}
           </div>
+
+          {/* Top-Right Floating Unmute Icon Button */}
+          {((isAudioBlocked || isMuted) && isPlaying && !isLocked) && (
+            <button
+              type="button"
+              className="yt-unmute-icon-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsMuted(false);
+                setIsAudioBlocked(false);
+                if (bgAudioRef.current) {
+                  bgAudioRef.current.muted = false;
+                  bgAudioRef.current.volume = volume / 100;
+                  bgAudioRef.current.currentTime = videoRef.current?.currentTime || 0;
+                  bgAudioRef.current.play().catch(() => {});
+                }
+              }}
+              title="Tap to unmute"
+              aria-label="Tap to unmute"
+            >
+              <VolumeMuteIcon size={20} />
+            </button>
+          )}
 
           {/* Screen Lock Overlay & Minimal Unlock Pill at Bottom */}
           {isLocked && (

@@ -35,7 +35,7 @@ export default function YouPage({
   const displayName = currentUser?.name || currentUser?.username || 'User';
 
   const handleShortcutClick = (targetPage) => {
-    if (['history', 'watch-later', 'liked', 'playlists'].includes(targetPage) && !currentUser) {
+    if (['history', 'watch-later', 'liked', 'playlists', 'subscriptions'].includes(targetPage) && !currentUser) {
       if (typeof onNotify === 'function') {
         onNotify(`Please sign in to view your ${targetPage.replace('-', ' ')}`);
       }
@@ -267,12 +267,12 @@ export default function YouPage({
               <div className="you-shortcut-text-box">
                 <span className="you-shortcut-label">Subscriptions</span>
                 <span className="you-shortcut-sub">
-                  {`${subscriptionsCount} channels`}
+                  {currentUser ? `${subscriptionsCount} channels` : 'Sign in to view'}
                 </span>
               </div>
             </div>
             <div className="you-shortcut-right">
-              {subscriptionsCount > 0 && (
+              {currentUser && subscriptionsCount > 0 && (
                 <span className="you-count-pill">{subscriptionsCount}</span>
               )}
               <span className="you-shortcut-chevron">›</span>
