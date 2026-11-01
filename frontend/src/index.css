@@ -1626,7 +1626,7 @@ textarea {
     backdrop-filter: blur(6px);
   }
 
-  /* Keep channel info and short title cleanly positioned above the mobile bottom nav bar */
+  /* Keep channel info, short title and description cleanly positioned at the bottom above the mobile bottom nav bar */
   .shorts-meta-overlay {
     position: absolute;
     bottom: calc(56px + env(safe-area-inset-bottom, 0px)) !important;
@@ -1635,17 +1635,43 @@ textarea {
     padding: 0 !important;
     background: none !important;
     background-color: transparent !important;
-    z-index: 20;
+    z-index: 22 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 6px !important;
+  }
+
+  .shorts-title-desc-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 84px;
+    overflow: hidden;
   }
 
   .shorts-video-title {
     font-size: 14px;
     font-weight: 500;
     line-height: 1.35;
-    margin: 2px 0 0 0;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+    margin: 0;
+    color: #ffffff;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
     display: -webkit-box;
-    -webkit-line-clamp: 3;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  .shorts-video-desc {
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.3;
+    margin: 0;
+    color: rgba(255, 255, 255, 0.88);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;
@@ -2819,6 +2845,88 @@ textarea {
   height: 100% !important;
   border: none !important;
   pointer-events: none !important;
+}
+
+/* Center Play/Pause Controller Overlay for Shorts (Only Play/Pause Kept) */
+.shorts-center-ctrl-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 28;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.shorts-center-playpause-btn {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.62);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+
+.shorts-center-playpause-btn:hover {
+  transform: scale(1.08);
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.shorts-center-playpause-btn:active {
+  transform: scale(0.92);
+}
+
+.shorts-center-ctrl-overlay.flash-visible {
+  animation: shortsFlashFade 0.65s ease forwards;
+}
+
+@keyframes shortsFlashFade {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.05);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+}
+
+.shorts-title-desc-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shorts-video-desc {
+  font-size: 13px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1.35;
+  margin: 0;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 @media (max-width: 768px) {
@@ -5166,17 +5274,33 @@ textarea {
     font-size: 12px;
   }
 
-  /* Mobile Video Player Responsive Controls */
-  .yt-theater-btn {
+  /* Mobile Video Player Responsive Controls: Hide all controllers, only keep play/pause */
+  .yt-custom-ctrl-bar .yt-ctrl-btn:not(.yt-play-btn),
+  .yt-custom-ctrl-bar .yt-volume-wrapper,
+  .yt-custom-ctrl-bar .yt-volume-slider,
+  .yt-custom-ctrl-bar .yt-time-display,
+  .yt-custom-ctrl-bar .yt-cc-btn,
+  .yt-custom-ctrl-bar .yt-settings-wrapper,
+  .yt-custom-ctrl-bar .yt-lock-btn,
+  .yt-custom-ctrl-bar .yt-ctrls-right {
     display: none !important;
   }
 
-  .yt-volume-slider {
-    display: none !important;
+  .yt-custom-ctrl-bar {
+    justify-content: center !important;
+    height: 48px !important;
   }
 
-  .yt-controller-bar {
-    padding: 0 8px 6px;
+  .yt-ctrls-left {
+    justify-content: center !important;
+    width: 100% !important;
+    gap: 0 !important;
+  }
+
+  .yt-play-btn {
+    width: 44px !important;
+    height: 44px !important;
+    transform: scale(1.15) !important;
   }
 
   .yt-scrubber-container {
@@ -5192,22 +5316,6 @@ textarea {
     transform: translateY(-50%) scale(1) !important;
     width: 14px;
     height: 14px;
-  }
-
-  .yt-ctrls-left,
-  .yt-ctrls-right {
-    gap: 3px;
-  }
-
-  .yt-ctrl-btn {
-    width: 34px;
-    height: 34px;
-  }
-
-  .yt-time-display {
-    font-size: 11px;
-    margin-left: 2px;
-    gap: 2px;
   }
 
   /* Playback Settings Dialog - Centered on Mobile Phone Display */

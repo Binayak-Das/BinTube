@@ -6,6 +6,8 @@ import {
   CloseIcon,
   VolumeHighIcon,
   VolumeMuteIcon,
+  PlayIcon,
+  PauseIcon,
 } from './Icons.jsx';
 import CommentsSection from './CommentsSection.jsx';
 import { apiUrl, isVercelDeployment } from '../config/api.js';
@@ -28,6 +30,7 @@ export default function ShortsPage({
   const [isMuted, setIsMuted] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [useShortsEmbed, setUseShortsEmbed] = useState(() => isVercelDeployment);
+  const [playFlash, setPlayFlash] = useState(null);
 
   const viewportRef = useRef(null);
   const reelRefs = useRef([]);
@@ -35,6 +38,15 @@ export default function ShortsPage({
   const audioRefs = useRef({});
   const iframeRefs = useRef({});
   const isFetchingRef = useRef(false);
+  const flashTimerRef = useRef(null);
+
+  const triggerPlayFlash = useCallback((type) => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setPlayFlash(type);
+    flashTimerRef.current = setTimeout(() => {
+      setPlayFlash(null);
+    }, 650);
+  }, []);
 
   const sendShortIframeCommand = useCallback((idx, func, args = []) => {
     try {
@@ -396,15 +408,14 @@ export default function ShortsPage({
                 {/* Video Playback Container - Zero Overlays */}
                 <div
                   className="shorts-video-viewport"
-                  onClick={() => {
+                  onClick={(e) => {
                     if (isActive) {
-                      setIsPlaying((p) => {
-                        const nextPlay = !p;
-                        if (useShortsEmbed) {
-                          sendShortIframeCommand(activeIdx, nextPlay ? 'playVideo' : 'pauseVideo');
-                        }
-                        return nextPlay;
-                      });
+                      const nextPlay = !isPlaying;
+                      setIsPlaying(nextPlay);
+                      if (useShortsEmbed) {
+                        sendShortIframeCommand(activeIdx, nextPlay ? 'playVideo' : 'pauseVideo');
+                      }
+                      triggerPlayFlash(nextPlay ? 'play' : 'pause');
                     } else {
                       scrollToReel(idx);
                     }
@@ -496,32 +507,62 @@ export default function ShortsPage({
                       loading="lazy"
                     />
                   )}
-                </div>
 
-                {/* Bottom Video Metadata Overlay */}
-                <div className="shorts-meta-overlay" onClick={(e) => e.stopPropagation()}>
-                    <div className="shorts-channel-row">
-                      <img
-                        src={
-                          short.channelAvatar ||
-                          `https://ui-avatars.com/api/?name=${encodeURIComponent(
-                            short.channelName || 'Creator'
-                          )}&background=ff0000&color=fff`
+                  {/* Center Play/Pause Controller Overlay - Only Play/Pause Kept, No Extra Controllers */}
+                  {isActive && (!isPlaying || playFlash) && (
+                    <div
+                      className={`shorts-center-ctrl-overlay ${!isPlaying ? 'paused-visible' : 'flash-visible'}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nextPlay = !isPlaying;
+                        setIsPlaying(nextPlay);
+                        if (useShortsEmbed) {
+                          sendShortIframeCommand(activeIdx, nextPlay ? 'playVideo' : 'pauseVideo');
                         }
-                        alt={short.channelName}
-                        className="shorts-channel-avatar"
-                      />
-                      <span className="shorts-channel-name">{short.channelName}</span>
+                        triggerPlayFlash(nextPlay ? 'play' : 'pause');
+                      }}
+                    >
                       <button
                         type="button"
-                        className={`shorts-sub-btn ${isSubscribed ? 'subscribed' : ''}`}
-                        onClick={() => onToggleSubscribe && onToggleSubscribe(short)}
+                        className="shorts-center-playpause-btn"
+                        title={isPlaying ? 'Pause' : 'Play'}
+                        aria-label={isPlaying ? 'Pause' : 'Play'}
                       >
-                        {isSubscribed ? 'Subscribed' : 'Subscribe'}
+                        {isPlaying ? <PauseIcon size={34} /> : <PlayIcon size={34} />}
                       </button>
                     </div>
-                    <h3 className="shorts-video-title">{short.title}</h3>
+                  )}
+                </div>
+
+                {/* Bottom Video Metadata Overlay (Channel, Title, and Description at bottom) */}
+                <div className="shorts-meta-overlay" onClick={(e) => e.stopPropagation()}>
+                  <div className="shorts-channel-row">
+                    <img
+                      src={
+                        short.channelAvatar ||
+                        `https://ui-avatars.com/api/?name=${encodeURIComponent(
+                          short.channelName || 'Creator'
+                        )}&background=ff0000&color=fff`
+                      }
+                      alt={short.channelName}
+                      className="shorts-channel-avatar"
+                    />
+                    <span className="shorts-channel-name">{short.channelName}</span>
+                    <button
+                      type="button"
+                      className={`shorts-sub-btn ${isSubscribed ? 'subscribed' : ''}`}
+                      onClick={() => onToggleSubscribe && onToggleSubscribe(short)}
+                    >
+                      {isSubscribed ? 'Subscribed' : 'Subscribe'}
+                    </button>
                   </div>
+                  <div className="shorts-title-desc-wrap">
+                    <h3 className="shorts-video-title">{short.title}</h3>
+                    {short.description && short.description.trim() !== '' && (
+                      <p className="shorts-video-desc">{short.description}</p>
+                    )}
+                  </div>
+                </div>
 
                 {/* Right Side Action Floating Column (Strictly NO watch later & NO up/down arrows) */}
                 <div className="shorts-side-actions" onClick={(e) => e.stopPropagation()}>
