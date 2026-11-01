@@ -564,12 +564,6 @@ export default function VideoPlayer({
     if (isVercelDeployment) {
       setUseEmbedFallback(true);
     }
-    setStreamError(false);
-    streamRetryRef.current = 0;
-    setIsMuted(false);
-    setIsAudioBlocked(false);
-    setVolume(100);
-    shouldBePlayingRef.current = true;
 
     if (videoRef.current) {
       videoRef.current.load();
