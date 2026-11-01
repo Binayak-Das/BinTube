@@ -633,6 +633,34 @@ textarea {
   max-width: 100%;
 }
 
+.main-content.shorts-mode {
+  padding: 0 !important;
+  margin: 0 !important;
+  width: 100%;
+  height: calc(100vh - var(--navbar-height));
+  overflow: hidden !important;
+  background-color: #0f0f0f;
+}
+
+/* Zero-Overlay Embed Frame (Pushes any YouTube embed overlays outside the clipping viewport) */
+.yt-no-overlay-embed-clipper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+.yt-no-overlay-embed-frame {
+  position: absolute;
+  top: -14%;
+  left: -2%;
+  width: 104%;
+  height: 128%;
+  border: none;
+  pointer-events: auto;
+}
+
 /* Category Filter Bar */
 .category-bar-wrapper {
   margin-bottom: 16px;
@@ -969,15 +997,17 @@ textarea {
 
 .shorts-reel-card {
   position: relative;
-  width: 380px;
-  max-width: calc(100vw - 120px);
-  height: calc(100% - 24px);
-  max-height: 780px;
+  height: calc(100% - 20px);
+  max-height: calc(100vh - var(--navbar-height) - 24px);
   aspect-ratio: 9 / 16;
+  width: auto;
+  max-width: calc(100vw - 120px);
   background: #000;
   border-radius: 16px;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.85);
 }
 
 .shorts-video-viewport {
@@ -987,7 +1017,6 @@ textarea {
   background: #000;
   border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85);
   cursor: pointer;
   user-select: none;
   display: flex;
@@ -997,13 +1026,30 @@ textarea {
 
 .shorts-side-actions {
   position: absolute;
-  left: calc(100% + 16px);
-  bottom: 16px;
+  left: calc(100% + 14px);
+  bottom: 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  z-index: 20;
+  z-index: 25;
+}
+
+@media (max-width: 1000px) and (min-width: 769px) {
+  .shorts-side-actions {
+    left: auto !important;
+    right: 14px !important;
+    bottom: 24px !important;
+  }
+
+  .shorts-side-actions .shorts-action-icon {
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+  }
+
+  .shorts-meta-overlay {
+    right: 76px !important;
+  }
 }
 
 .shorts-html5-video {
@@ -1012,16 +1058,7 @@ textarea {
   object-fit: contain !important;
   display: block;
   margin: 0 auto;
-}
-
-.shorts-overlay-top {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  background: #000;
 }
 
 .shorts-autoadvance-pill {
@@ -1220,15 +1257,20 @@ textarea {
 
 .shorts-meta-overlay {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 40px 16px 16px 16px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.5) 60%, transparent 100%);
+  bottom: 16px;
+  left: 16px;
+  right: 70px;
+  padding: 0;
+  background: none !important;
+  background-color: transparent !important;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 8;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.shorts-meta-overlay * {
   pointer-events: auto;
 }
 
@@ -1507,49 +1549,63 @@ textarea {
     padding-bottom: 58px !important;
   }
 
-  /* Mobile Reels Feed (TikTok / Shorts full-screen style) */
+  .main-content.shorts-mode {
+    padding: 0 !important;
+    padding-bottom: 0 !important;
+    margin: 0 !important;
+    height: calc(100dvh - 56px - 50px) !important;
+    height: calc(100vh - 56px - 50px) !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    overflow: hidden !important;
+  }
+
+  /* Mobile Reels Feed (TikTok / Shorts full-screen style - 100% responsive) */
   .shorts-reel-page-container {
-    height: calc(100dvh - 56px - 50px);
-    height: calc(100vh - 56px - 50px);
-    width: 100vw;
+    height: 100% !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    overflow: hidden !important;
   }
 
   .shorts-reel-item {
-    padding: 0;
-    height: calc(100dvh - 56px - 50px);
-    height: calc(100vh - 56px - 50px);
-    width: 100vw;
+    padding: 0 !important;
+    height: 100% !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
   }
 
   .shorts-reel-card {
-    width: 100%;
-    max-width: 100%;
-    height: 100%;
-    max-height: 100%;
-    border-radius: 0;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 0 !important;
+    aspect-ratio: unset !important;
+    box-shadow: none !important;
   }
 
   .shorts-video-viewport {
-    width: 100%;
-    height: 100%;
-    border-radius: 0;
-    box-shadow: none;
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
     display: flex;
     align-items: center;
     justify-content: center;
   }
 
   .shorts-html5-video {
-    width: 100%;
-    height: 100%;
+    width: 100% !important;
+    height: 100% !important;
     object-fit: contain !important;
   }
 
   .shorts-side-actions {
     position: absolute;
-    right: 12px;
-    left: auto;
-    bottom: 74px !important;
+    right: 12px !important;
+    left: auto !important;
+    bottom: 68px !important;
     z-index: 25;
     gap: 14px;
   }
@@ -1561,12 +1617,15 @@ textarea {
     backdrop-filter: blur(6px);
   }
 
-  /* Keep channel info and short title well above the 50px mobile bottom nav bar */
+  /* Keep channel info and short title cleanly positioned above the mobile bottom nav bar */
   .shorts-meta-overlay {
-    padding-right: 80px;
-    padding-left: 14px;
-    padding-bottom: 12px;
-    bottom: 54px !important;
+    position: absolute;
+    bottom: 20px !important;
+    left: 14px !important;
+    right: 76px !important;
+    padding: 0 !important;
+    background: none !important;
+    background-color: transparent !important;
     z-index: 20;
   }
 
@@ -1577,9 +1636,10 @@ textarea {
     margin: 2px 0 0 0;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    word-break: break-word;
   }
 
   .shorts-nav-arrows {

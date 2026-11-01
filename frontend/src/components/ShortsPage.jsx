@@ -2,9 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ThumbsUpIcon,
   ShareIcon,
-  PlayIcon,
-  VolumeHighIcon,
-  VolumeMuteIcon,
   CommentIcon,
   CloseIcon,
 } from './Icons.jsx';
@@ -31,7 +28,6 @@ export default function ShortsPage({
   const [autoAdvance, setAutoAdvance] = useState(
     () => localStorage.getItem('shorts_autoadvance') === 'true'
   );
-  const [failedStreamIds, setFailedStreamIds] = useState(new Set());
 
   const viewportRef = useRef(null);
   const reelRefs = useRef([]);
@@ -276,10 +272,6 @@ export default function ShortsPage({
     if (typeof onNotify === 'function') onNotify(`Link: ${shareUrl}`);
   };
 
-  const markStreamFailed = (sId) => {
-    setFailedStreamIds((prev) => new Set([...prev, sId]));
-  };
-
   if (loading && shorts.length === 0) {
     return (
       <div className="shorts-page-loading">
@@ -306,7 +298,6 @@ export default function ShortsPage({
                 (c) => (c.channelName || '').toLowerCase() === (short.channelName || '').toLowerCase()
               )
           );
-          const hasFailedStream = failedStreamIds.has(sId);
 
           // Format clean likes count (displaying actual like count, strictly NEVER the word "views")
           const rawLikes = short.likes ? String(short.likes) : '';
@@ -326,7 +317,7 @@ export default function ShortsPage({
             >
               {/* Centered Reel Card */}
               <div className="shorts-reel-card">
-                {/* Video Playback / Fallback Container */}
+                {/* Video Playback Container - Zero Overlays */}
                 <div
                   className="shorts-video-viewport"
                   onClick={() => {
@@ -338,58 +329,55 @@ export default function ShortsPage({
                   }}
                 >
                   {isNearActive ? (
-                    hasFailedStream ? (
-                      <iframe
+                    <>
+                      <video
+                        ref={(el) => (videoRefs.current[idx] = el)}
                         className="shorts-html5-video"
-                        src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(sId)}?autoplay=${isActive ? '1' : '0'}&controls=0&loop=1&playlist=${encodeURIComponent(sId)}&playsinline=1&rel=0`}
-                        allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
-                        allowFullScreen
-                        title={short.title}
-                        style={{ border: 'none', width: '100%', height: '100%' }}
+                        src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/stream`)}
+                        poster={short.thumbnailUrl || `https://i.ytimg.com/vi/${sId}/hqdefault.jpg`}
+                        autoPlay={isActive}
+                        loop={!autoAdvance}
+                        playsInline
+                        preload="metadata"
+                        muted={true}
+                        onTimeUpdate={(e) => {
+                          const aud = audioRefs.current[idx];
+                          if (aud && Math.abs(e.target.currentTime - aud.currentTime) > 0.25) {
+                            aud.currentTime = e.target.currentTime;
+                          }
+                        }}
+                        onSeeked={(e) => {
+                          const aud = audioRefs.current[idx];
+                          if (aud) aud.currentTime = e.target.currentTime;
+                        }}
+                        onEnded={() => {
+                          if (autoAdvance) {
+                            scrollToReel(idx + 1);
+                          }
+                        }}
+                        onError={(e) => {
+                          // Resilient retry on transient stream error - never fall back to iframe
+                          setTimeout(() => {
+                            if (e.target && !e.target.paused) {
+                              e.target.load();
+                              e.target.play().catch(() => {});
+                            }
+                          }, 1000);
+                        }}
                       />
-                    ) : (
-                      <>
-                        <video
-                          ref={(el) => (videoRefs.current[idx] = el)}
-                          className="shorts-html5-video"
-                          src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/stream`)}
-                          poster={short.thumbnailUrl || `https://i.ytimg.com/vi/${sId}/hqdefault.jpg`}
-                          autoPlay={isActive}
-                          loop={!autoAdvance}
-                          playsInline
-                          preload="metadata"
-                          muted={true}
-                          onTimeUpdate={(e) => {
-                            const aud = audioRefs.current[idx];
-                            if (aud && Math.abs(e.target.currentTime - aud.currentTime) > 0.25) {
-                              aud.currentTime = e.target.currentTime;
-                            }
-                          }}
-                          onSeeked={(e) => {
-                            const aud = audioRefs.current[idx];
-                            if (aud) aud.currentTime = e.target.currentTime;
-                          }}
-                          onEnded={() => {
-                            if (autoAdvance) {
-                              scrollToReel(idx + 1);
-                            }
-                          }}
-                          onError={() => markStreamFailed(sId)}
-                        />
-                        <audio
-                          ref={(el) => (audioRefs.current[idx] = el)}
-                          src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/audio`)}
-                          loop={!autoAdvance}
-                          preload="metadata"
-                          muted={isMuted}
-                          onEnded={() => {
-                            if (autoAdvance) {
-                              scrollToReel(idx + 1);
-                            }
-                          }}
-                        />
-                      </>
-                    )
+                      <audio
+                        ref={(el) => (audioRefs.current[idx] = el)}
+                        src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/audio`)}
+                        loop={!autoAdvance}
+                        preload="metadata"
+                        muted={isMuted}
+                        onEnded={() => {
+                          if (autoAdvance) {
+                            scrollToReel(idx + 1);
+                          }
+                        }}
+                      />
+                    </>
                   ) : (
                     <img
                       src={short.thumbnailUrl || `https://i.ytimg.com/vi/${sId}/hqdefault.jpg`}
@@ -398,50 +386,10 @@ export default function ShortsPage({
                       loading="lazy"
                     />
                   )}
+                </div>
 
-                  {/* Top Overlay: Auto-scroll & Mute/Unmute */}
-                  <div
-                    className="shorts-overlay-top"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      type="button"
-                      className={`shorts-autoadvance-pill ${autoAdvance ? 'active' : ''}`}
-                      onClick={() => {
-                        const next = !autoAdvance;
-                        setAutoAdvance(next);
-                        localStorage.setItem('shorts_autoadvance', String(next));
-                        if (typeof onNotify === 'function') {
-                          onNotify(next ? 'Auto-scroll next short: ON' : 'Auto-scroll next short: OFF');
-                        }
-                      }}
-                      title={autoAdvance ? 'Auto-scroll is ON' : 'Auto-scroll is OFF'}
-                    >
-                      <span>Auto-scroll</span>
-                      <span className={`shorts-pill-status ${autoAdvance ? 'on' : ''}`} />
-                    </button>
-
-                    <button
-                      type="button"
-                      className="shorts-ctrl-round"
-                      onClick={() => setIsMuted((m) => !m)}
-                      title={isMuted ? 'Unmute' : 'Mute'}
-                    >
-                      {isMuted ? <VolumeMuteIcon size={20} /> : <VolumeHighIcon size={20} />}
-                    </button>
-                  </div>
-
-                  {/* Paused state overlay */}
-                  {isActive && !isPlaying && (
-                    <div className="shorts-pause-overlay">
-                      <div className="shorts-pause-circle">
-                        <PlayIcon size={36} />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Bottom Video Metadata Overlay */}
-                  <div className="shorts-meta-overlay" onClick={(e) => e.stopPropagation()}>
+                {/* Bottom Video Metadata Overlay */}
+                <div className="shorts-meta-overlay" onClick={(e) => e.stopPropagation()}>
                     <div className="shorts-channel-row">
                       <img
                         src={
@@ -464,7 +412,6 @@ export default function ShortsPage({
                     </div>
                     <h3 className="shorts-video-title">{short.title}</h3>
                   </div>
-                </div>
 
                 {/* Right Side Action Floating Column (Strictly NO watch later & NO up/down arrows) */}
                 <div className="shorts-side-actions" onClick={(e) => e.stopPropagation()}>

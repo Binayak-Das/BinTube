@@ -33,7 +33,7 @@ export default function MobileBottomNav({
         className={`mobile-nav-item ${activePage === 'shorts' ? 'active' : ''}`}
         onClick={() => onNavigate('shorts')}
       >
-        <ShortsIcon size={22} color={activePage === 'shorts' ? '#ff0000' : 'currentColor'} />
+        <ShortsIcon size={22} color="currentColor" />
         <span>Shorts</span>
       </button>
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckIcon } from './Icons.jsx';
+import { CheckIcon, ClockIcon } from './Icons.jsx';
 import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function SearchResultsPage({

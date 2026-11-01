@@ -445,32 +445,45 @@ export default function VideoPlayer({
     }
   };
 
+  const streamRetryRef = useRef(0);
   const handleVideoError = () => {
     setIsBuffering(false);
-    console.warn('Direct stream error on <video>, activating resilient embed fallback...');
+    if (streamRetryRef.current < 2) {
+      streamRetryRef.current += 1;
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.load();
+          videoRef.current.play().catch(() => {});
+        }
+      }, 800);
+      return;
+    }
+    // Clean zero-overlay fallback only after stream retries exhausted
     setUseEmbedFallback(true);
   };
 
-  // Switch video stream on video change - Unmuted by default
+  // Switch video stream on video change - Strictly Unmuted by default
   useEffect(() => {
     setCurrentTime(0);
     setDuration(0);
     setIsBuffering(true);
     setIsPlaying(true);
     setUseEmbedFallback(false);
+    setIsMuted(false);
+    setVolume(100);
     shouldBePlayingRef.current = true;
 
     if (videoRef.current) {
       videoRef.current.load();
-      videoRef.current.muted = true;
+      videoRef.current.muted = true; // Video track is kept muted to guarantee zero browser autoplay blockage and avoid double audio
       videoRef.current.playbackRate = playbackSpeed;
       videoRef.current.play().catch(() => { });
     }
 
     if (bgAudioRef.current) {
       bgAudioRef.current.load();
-      bgAudioRef.current.volume = isMuted ? 0 : volume / 100;
-      bgAudioRef.current.muted = isMuted;
+      bgAudioRef.current.volume = 1;
+      bgAudioRef.current.muted = false;
       bgAudioRef.current.playbackRate = playbackSpeed;
       if (shouldBePlayingRef.current) {
         bgAudioRef.current.play().catch(() => { });
@@ -949,14 +962,15 @@ export default function VideoPlayer({
           {/* Native HTML5 Video Element with resilient IFrame Fallback */}
           <div className="yt-video-embed-box">
             {useEmbedFallback ? (
-              <iframe
-                className="yt-html5-video"
-                src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(vId)}?autoplay=1&controls=0&playsinline=1&rel=0&modestbranding=1`}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                title={video.title}
-                style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'auto' }}
-              />
+              <div className="yt-no-overlay-embed-clipper">
+                <iframe
+                  className="yt-no-overlay-embed-frame"
+                  src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(vId)}?autoplay=1&controls=0&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1&fs=0`}
+                  allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                  title={video.title}
+                />
+              </div>
             ) : (
               <video
                 ref={videoRef}
@@ -1389,7 +1403,7 @@ export default function VideoPlayer({
               title="Like"
             >
               <ThumbsUpIcon size={16} filled={isLiked} />
-              <span>{video.likes}</span>
+              <span>{String(video.likes || 'Like').replace(/\s*views?/gi, '').trim()}</span>
             </button>
 
             {/* Watch Later toggle */}

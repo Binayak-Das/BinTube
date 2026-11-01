@@ -326,6 +326,7 @@ export default function App() {
       }
 
       const thisFetchId = ++fetchIdRef.current;
+      let willRetry = false;
 
       try {
         const queryTerm = activePage === 'search' ? searchQuery : '';
@@ -388,8 +389,9 @@ export default function App() {
         }
       } catch (err) {
         console.error('Fetch YouTube videos error:', err);
-        // If background tab switch interrupted the initial fetch, retry automatically instead of flashing "no videos found"
+        // If background tab switch interrupted the initial fetch, retry automatically while keeping skeleton loading active
         if (isReset && thisFetchId === fetchIdRef.current) {
+          willRetry = true;
           setTimeout(() => {
             if (thisFetchId === fetchIdRef.current) {
               fetchVideos(pageToFetch, isReset);
@@ -398,7 +400,7 @@ export default function App() {
           return;
         }
       } finally {
-        if (thisFetchId === fetchIdRef.current) {
+        if (!willRetry && thisFetchId === fetchIdRef.current) {
           setLoading(false);
           isFetchingRef.current = false;
           if (activePage === 'home' && isReset) {
@@ -1111,7 +1113,11 @@ export default function App() {
         />
 
         {/* Main Content Area */}
-        <main className={`main-content ${activePage === 'watch' ? 'watch-mode' : ''}`}>
+        <main
+          className={`main-content ${activePage === 'watch' ? 'watch-mode' : ''} ${
+            activePage === 'shorts' ? 'shorts-mode' : ''
+          }`}
+        >
           {/* HOME PAGE: Display all videos only after loading everything (both shorts and videos) */}
           {activePage === 'home' && (
             <>

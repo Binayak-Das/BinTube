@@ -16,6 +16,14 @@ import historyRoutes from './routes/history.js';
 
 dotenv.config();
 
+// Process-level crash prevention for resilient streaming pipelines
+process.on('uncaughtException', (err) => {
+  console.warn('Recovered from uncaught stream exception:', err?.message || err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.warn('Recovered from unhandled stream rejection:', reason?.message || reason);
+});
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/bintube';

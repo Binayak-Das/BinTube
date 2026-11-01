@@ -451,6 +451,9 @@ router.get('/:id/stream', async (req, res) => {
     }
 
     const nodeStream = Readable.fromWeb(upstream.body);
+    nodeStream.on('error', () => {
+      // Gracefully handle client abort / pipeline disconnect without crashing server
+    });
     nodeStream.pipe(res);
 
     req.on('close', () => {
@@ -505,6 +508,9 @@ router.get('/:id/audio', async (req, res) => {
     }
 
     const nodeStream = Readable.fromWeb(upstream.body);
+    nodeStream.on('error', () => {
+      // Gracefully handle client abort / pipeline disconnect without crashing server
+    });
     nodeStream.pipe(res);
 
     req.on('close', () => {

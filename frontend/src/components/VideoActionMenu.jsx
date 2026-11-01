@@ -2,17 +2,22 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from
 import { createPortal } from 'react-dom';
 import { MoreVerticalIcon, ClockIcon, PlaylistIcon, ShareIcon } from './Icons.jsx';
 
-function calculateMenuCoords(btnEl) {
+function calculateMenuCoords(btnEl, menuEl = null) {
   if (!btnEl) return { top: 0, left: 0 };
   const rect = btnEl.getBoundingClientRect();
-  const menuWidth = 224;
-  const menuHeight = 200;
+  const menuWidth = menuEl?.offsetWidth || 224;
+  const menuHeight = menuEl?.offsetHeight || 190;
 
   // Determine vertical placement: open downwards, or upwards if near viewport bottom
   const spaceBelow = window.innerHeight - rect.bottom;
   let top = rect.bottom + 6;
-  if (spaceBelow < menuHeight && rect.top > menuHeight) {
-    top = Math.max(8, rect.top - menuHeight - 6);
+  if (spaceBelow < menuHeight) {
+    if (rect.top > menuHeight + 6) {
+      top = Math.max(8, rect.top - menuHeight - 6);
+    } else {
+      // Fit cleanly inside viewport without overlapping button
+      top = Math.max(8, window.innerHeight - menuHeight - 8);
+    }
   }
 
   // Determine horizontal placement: align right with button, bounded to screen edges
@@ -43,7 +48,7 @@ export default function VideoActionMenu({
 
   const updateCoords = useCallback(() => {
     if (!btnRef.current) return;
-    setCoords(calculateMenuCoords(btnRef.current));
+    setCoords(calculateMenuCoords(btnRef.current, dropdownRef.current));
   }, []);
 
   useLayoutEffect(() => {
