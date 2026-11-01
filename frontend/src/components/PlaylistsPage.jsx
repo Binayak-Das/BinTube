@@ -9,6 +9,7 @@ import {
   ArrowLeftIcon,
   CheckIcon,
 } from './Icons.jsx';
+import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function PlaylistsPage({
   playlists = [],
@@ -20,6 +21,8 @@ export default function PlaylistsPage({
   onExplore,
   watchLaterIds = [],
   onToggleWatchLater,
+  onOpenSaveToPlaylist,
+  onNotify,
 }) {
   const [activePlaylistId, setActivePlaylistId] = useState(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -187,29 +190,19 @@ export default function PlaylistsPage({
                           </div>
 
                           <div className="liked-row-actions">
-                            <button
-                              type="button"
-                              className={`liked-row-btn ${isSaved ? 'active-wl' : ''}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onToggleWatchLater(video);
+                            <VideoActionMenu
+                              video={video}
+                              isWatchLater={isSaved}
+                              onToggleWatchLater={onToggleWatchLater}
+                              onOpenSaveToPlaylist={onOpenSaveToPlaylist}
+                              onNotify={onNotify}
+                              extraAction={{
+                                label: 'Remove from playlist',
+                                icon: <TrashIcon size={18} />,
+                                onClick: () => onRemoveVideoFromPlaylist(activePlaylist.id, vId),
+                                danger: true,
                               }}
-                              title={isSaved ? 'Remove from Watch Later' : 'Save to Watch Later'}
-                            >
-                              <ClockIcon size={16} />
-                            </button>
-
-                            <button
-                              type="button"
-                              className="liked-row-btn"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRemoveVideoFromPlaylist(activePlaylist.id, vId);
-                              }}
-                              title="Remove from playlist"
-                            >
-                              <TrashIcon size={16} />
-                            </button>
+                            />
                           </div>
                         </div>
                       );

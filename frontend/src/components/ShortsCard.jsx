@@ -1,17 +1,21 @@
 import React from 'react';
-import { ShortsIcon, ClockIcon } from './Icons.jsx';
+import { ShortsIcon } from './Icons.jsx';
 
 export default function ShortsCard({
   video,
   onSelectVideo,
-  isWatchLater,
-  onToggleWatchLater,
 }) {
+  const vId = video.videoId || video._id;
+
   return (
-    <div className="shorts-card" onClick={() => onSelectVideo(video)}>
+    <div
+      className="shorts-card"
+      onClick={() => onSelectVideo && onSelectVideo(video)}
+      title={video.title}
+    >
       <div className="shorts-thumb-box">
         <img
-          src={video.thumbnailUrl}
+          src={video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`}
           alt={video.title}
           className="shorts-img"
           loading="lazy"
@@ -19,17 +23,6 @@ export default function ShortsCard({
         <div className="shorts-badge">
           <ShortsIcon size={16} />
           <span>Shorts</span>
-        </div>
-
-        {/* Quick action buttons */}
-        <div className="shorts-quick-actions" onClick={(e) => e.stopPropagation()}>
-          <button
-            className={`quick-action-btn ${isWatchLater ? 'active' : ''}`}
-            onClick={() => onToggleWatchLater(video)}
-            title={isWatchLater ? 'Remove from Watch Later' : 'Watch Later'}
-          >
-            <ClockIcon size={14} />
-          </button>
         </div>
 
         {/* Bottom Title & Views */}

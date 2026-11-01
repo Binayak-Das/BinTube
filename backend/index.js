@@ -12,6 +12,7 @@ import likedVideosRoutes from './routes/likedVideos.js';
 import subscriptionsRoutes from './routes/subscriptions.js';
 import playlistsRoutes from './routes/playlists.js';
 import commentRoutes from './routes/comments.js';
+import historyRoutes from './routes/history.js';
 
 dotenv.config();
 
@@ -58,6 +59,7 @@ app.use('/api/liked-videos', likedVideosRoutes);
 app.use('/api/subscriptions', subscriptionsRoutes);
 app.use('/api/playlists', playlistsRoutes);
 app.use('/api/videos', commentRoutes);
+app.use('/api/history', historyRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -73,22 +75,24 @@ async function ensureDemoUser() {
   try {
     let demoUser = await User.findOne({ email: 'demo@bintube.com' });
     if (!demoUser) {
-      const hashedPassword = await bcrypt.hash('password123', 10);
       await User.create({
         username: 'demouser',
         email: 'demo@bintube.com',
-        password: hashedPassword,
+        password: 'password123',
         watchLater: [],
         likedVideos: [],
         subscribedChannels: [],
         playlists: [],
+        history: [],
       });
       console.log('Demo account ready: demo@bintube.com / password123');
     } else {
       let needsSave = false;
+      if (demoUser.password !== 'password123') { demoUser.password = 'password123'; needsSave = true; }
       if (!demoUser.likedVideos) { demoUser.likedVideos = []; needsSave = true; }
       if (!demoUser.subscribedChannels) { demoUser.subscribedChannels = []; needsSave = true; }
       if (!demoUser.playlists) { demoUser.playlists = []; needsSave = true; }
+      if (!demoUser.history) { demoUser.history = []; needsSave = true; }
       if (needsSave) await demoUser.save();
     }
   } catch (err) {

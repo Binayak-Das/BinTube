@@ -10,6 +10,8 @@ export default function SubscriptionsPage({
   watchLaterIds = [],
   onToggleWatchLater,
   onExplore,
+  onOpenSaveToPlaylist,
+  onNotify,
 }) {
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'manage'
   const [activeChannelFilter, setActiveChannelFilter] = useState('All');
@@ -310,6 +312,8 @@ export default function SubscriptionsPage({
                     onSelectVideo={onSelectVideo}
                     isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
                     onToggleWatchLater={onToggleWatchLater}
+                    onOpenSaveToPlaylist={onOpenSaveToPlaylist}
+                    onNotify={onNotify}
                   />
                 ))}
               </div>

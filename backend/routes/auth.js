@@ -32,6 +32,7 @@ const formatUserResponse = (user) => {
       coverThumbnail: (p.videos && p.videos.length > 0) ? p.videos[0].thumbnailUrl : '',
     })),
     playlistsCount: (user.playlists || []).length,
+    historyCount: (user.history || []).length,
   };
 };
 
@@ -68,17 +69,16 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'This username is already taken.' });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
+    // Store plain text password directly without hashing (as requested)
     const newUser = await User.create({
       username: username.trim(),
       email: email.toLowerCase().trim(),
-      password: hashedPassword,
+      password: password,
       watchLater: [],
       likedVideos: [],
       subscribedChannels: [],
       playlists: [],
+      history: [],
     });
 
     const token = generateToken(newUser._id);
@@ -113,7 +113,14 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid credentials. Please check and try again.' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    let isMatch = user.password === password;
+    if (!isMatch && user.password && user.password.startsWith('$2')) {
+      // Backwards compatibility for previously hashed bcrypt accounts
+      try {
+        isMatch = await bcrypt.compare(password, user.password);
+      } catch (_) {}
+    }
+
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid credentials. Please check and try again.' });
     }

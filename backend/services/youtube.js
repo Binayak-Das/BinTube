@@ -336,41 +336,79 @@ export async function fetchHomeSections() {
   };
 }
 
+// Search query modifiers for unlimited paginated results
+const SEARCH_MODIFIERS = [
+  '',
+  'popular',
+  'video',
+  'trending',
+  'official',
+  'hd',
+  'clips',
+  'new',
+  'best',
+  'highlights',
+  'live',
+  'full',
+  'top',
+  'moments',
+  'viral',
+  'compilation',
+  'music',
+  'gameplay',
+  'review',
+  'channel',
+];
+
 // Fetch Paginated YouTube Videos (Search results or Category browsing)
-// For browsing (no search query), returns randomized videos on page 1 strictly isolated to the category
+// Supports UNLIMITED infinite loading for Home, Search, Shorts, and Up Next
 export async function fetchYouTubeVideos({ query = '', category = 'All', page = 1, limit = 12 }) {
   const isSearch = Boolean(query && query.trim());
 
-  // If user searched for a specific term, preserve relevance without randomizing
+  // If user searched for a specific term, dynamically generate query variants for unlimited pages
   if (isSearch) {
     const searchKey = query.trim();
-    const queryList = [
-      searchKey,
-      `${searchKey} popular`,
-      `${searchKey} video`,
-      `${searchKey} trending`,
-    ];
+    const modIdx1 = ((page - 1) * 2) % SEARCH_MODIFIERS.length;
+    const modIdx2 = ((page - 1) * 2 + 1) % SEARCH_MODIFIERS.length;
+    
+    const q1 = page === 1 ? searchKey : (SEARCH_MODIFIERS[modIdx1] ? `${searchKey} ${SEARCH_MODIFIERS[modIdx1]}` : searchKey);
+    const q2 = `${searchKey} ${SEARCH_MODIFIERS[modIdx2] || 'video'}`;
+    const queryList = q1 === q2 ? [q1] : [q1, q2];
 
-    let allVideos = [];
+    const results = await Promise.all(
+      queryList.map((q) => searchAndFormatQuery(q, category))
+    );
+
+    const pageVideos = [];
     const seen = new Set();
-    for (const q of queryList) {
-      const results = await searchAndFormatQuery(q, category);
-      for (const v of results) {
+    for (const list of results) {
+      for (const v of list) {
         const id = v.videoId || v._id;
         if (id && !seen.has(id)) {
           seen.add(id);
-          allVideos.push(v);
+          pageVideos.push(v);
         }
       }
-      if (allVideos.length >= page * limit) break;
     }
 
-    const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + limit;
-    const paginatedVideos = allVideos.slice(startIndex, endIndex);
-    const total = Math.max(allVideos.length, 120);
-    const totalPages = Math.ceil(total / limit) || 10;
-    const hasMore = page < 25 && paginatedVideos.length > 0;
+    // If still need more to fill limit, fetch base searchKey
+    if (pageVideos.length < limit && page > 1) {
+      const fallbackList = await searchAndFormatQuery(searchKey, category);
+      for (const v of fallbackList) {
+        const id = v.videoId || v._id;
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          pageVideos.push(v);
+        }
+        if (pageVideos.length >= limit) break;
+      }
+    }
+
+    const paginatedVideos = pageVideos.slice(0, limit);
+    const total = 9999; // Unlimited virtual catalog
+    const totalPages = 999;
+    // Always hasMore for infinite scroll
+    const hasMore = true;
 
     return {
       videos: paginatedVideos,
@@ -391,8 +429,12 @@ export async function fetchYouTubeVideos({ query = '', category = 'All', page = 
   if (page === 1) {
     chosenQueries = pickRandomItems(queryList, 2);
   } else {
-    const q1 = queryList[(page * 2 - 2) % queryList.length];
-    const q2 = queryList[(page * 2 - 1) % queryList.length];
+    const cycle = Math.floor((page * 2 - 2) / queryList.length);
+    const q1Raw = queryList[(page * 2 - 2) % queryList.length];
+    const q2Raw = queryList[(page * 2 - 1) % queryList.length];
+    const modifier = cycle > 0 ? ` ${SEARCH_MODIFIERS[cycle % SEARCH_MODIFIERS.length]}` : '';
+    const q1 = `${q1Raw}${modifier}`.trim();
+    const q2 = `${q2Raw}${modifier}`.trim();
     chosenQueries = q1 === q2 ? [q1] : [q1, q2];
   }
 
@@ -430,9 +472,10 @@ export async function fetchYouTubeVideos({ query = '', category = 'All', page = 
   }
 
   const resultVideos = page === 1 ? shuffleArray(pageVideos).slice(0, limit) : pageVideos.slice(0, limit);
-  const total = Math.max(resultVideos.length * 8, 120);
-  const totalPages = Math.ceil(total / limit) || 10;
-  const hasMore = page < 25 && resultVideos.length > 0;
+  const total = 9999;
+  const totalPages = 999;
+  // Unlimited endless loading across all categories
+  const hasMore = true;
 
   return {
     videos: resultVideos,

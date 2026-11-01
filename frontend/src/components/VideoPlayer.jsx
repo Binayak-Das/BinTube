@@ -20,17 +20,16 @@ import {
   PlaylistIcon,
   SpeedometerIcon,
   LoopIcon,
+  LockIcon,
+  UnlockIcon,
 } from './Icons.jsx';
 import CommentsSection from './CommentsSection.jsx';
+import VideoActionMenu from './VideoActionMenu.jsx';
 import { apiUrl } from '../config/api.js';
 
 // Base64 1x1 invisible MP4 loop for bulletproof mobile screen wake lock (NoSleep standard)
 const NO_SLEEP_VIDEO_SRC =
   'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAr9tZGF0AAACoAYF//+///AAAAMmF2Y0MBZAAK/+EAGWdkAAqs2V+WXAWyAAADAAIAAAMAYB4kSywBAAZo6+PLIsAAAAAYc3R0cwAAAAAAAAABAAAAAQAAAgAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAAEAAAABAAAAFHN0c3oAAAAAAAACtwAAAAEAAAAUc3RjbwAAAAAAAAABAAAAMAAAAGJ1ZHRhAAAAWm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALWlsc3QAAAAlqXRvbwAAAB1kYXRhAAAAAQAAAABMYXZmNTQuNjMuMTA0';
-
-// Base64 valid 1-second silent WAV for mobile background audio routing & MediaSession keepalive
-const SILENT_AUDIO_SRC =
-  'data:audio/wav;base64,UklGRqxYAQBXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YYhYAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 // Format seconds to mm:ss or hh:mm:ss
 function formatTime(seconds) {
@@ -62,20 +61,21 @@ export default function VideoPlayer({
   onOpenSaveToPlaylist,
   currentUser = null,
   onRequireAuth = null,
+  watchLaterIds = [],
 }) {
   const containerRef = useRef(null);
-  const playerRef = useRef(null);
+  const videoRef = useRef(null);
+  const bgAudioRef = useRef(null);
   const progressTrackRef = useRef(null);
   const hideControlsTimerRef = useRef(null);
-  const intervalRef = useRef(null);
-  const audioAnchorRef = useRef(null);
-  const audioContextRef = useRef(null);
+  const unlockPillTimerRef = useRef(null);
   const keepAwakeVideoRef = useRef(null);
   const wakeLockRef = useRef(null);
-  const backgroundWorkerRef = useRef(null);
   const shouldBePlayingRef = useRef(true);
+  const settingsMenuRef = useRef(null);
 
   const [isPlaying, setIsPlaying] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(100);
@@ -84,6 +84,9 @@ export default function VideoPlayer({
   const [isTheater, setIsTheater] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const [showUnlockPill, setShowUnlockPill] = useState(false);
+  const [useEmbedFallback, setUseEmbedFallback] = useState(false);
   const [settingsView, setSettingsView] = useState('main'); // 'main' or 'speed'
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isLooping, setIsLooping] = useState(() => localStorage.getItem('yt_loop') === 'true');
@@ -119,12 +122,16 @@ export default function VideoPlayer({
   const [hasMoreRelated, setHasMoreRelated] = useState(true);
   const relatedSentinelRef = useRef(null);
 
+  const vId = video.videoId || video._id;
+  const videoSrc = apiUrl(`/api/videos/${encodeURIComponent(vId)}/stream`);
+  const audioSrc = apiUrl(`/api/videos/${encodeURIComponent(vId)}/audio`);
+
   useEffect(() => {
     setExtraRelated([]);
     setRelatedPage(1);
     setLoadingMoreRelated(false);
     setHasMoreRelated(true);
-  }, [video.videoId || video._id]);
+  }, [vId]);
 
   const allRelatedVideos = [...relatedVideos, ...extraRelated];
 
@@ -142,14 +149,32 @@ export default function VideoPlayer({
     ? (playlistNextVideo || upNextVideo)
     : upNextVideo;
 
-  // Fetch more related videos on page scroll
+  // Fetch more related videos on page scroll with UNLIMITED endless loading
   const fetchMoreRelated = useCallback(async () => {
-    if (loadingMoreRelated || !hasMoreRelated) return;
+    if (loadingMoreRelated) return;
     setLoadingMoreRelated(true);
     try {
       const currentVId = video.videoId || video._id;
-      const queryTerm = video.title || video.channelName || '';
+      const cleanTitle = (video.title || '').replace(/[\(\)\[\]\{\}\#\@\|\-]/g, ' ').trim();
+      const primaryKeywords = cleanTitle.split(' ').slice(0, 5).join(' ');
+      const channelKeywords = video.channelName || '';
+      const catKeywords = video.category && video.category !== 'All' ? video.category : 'Music';
+
+      const relatedQueryPool = [
+        primaryKeywords,
+        `${channelKeywords} videos`,
+        `${primaryKeywords} trending`,
+        `${catKeywords} popular`,
+        `${channelKeywords} music`,
+        `${primaryKeywords} live`,
+        'viral videos 2025',
+        'recommended trending',
+      ];
+
       const nextPage = relatedPage + 1;
+      const qIdx = nextPage % relatedQueryPool.length;
+      const queryTerm = relatedQueryPool[qIdx] || primaryKeywords || 'trending';
+
       const res = await fetch(
         apiUrl(`/api/videos?q=${encodeURIComponent(queryTerm)}&page=${nextPage}&limit=12`)
       );
@@ -165,21 +190,32 @@ export default function VideoPlayer({
 
         if (incoming.length > 0) {
           setExtraRelated((prev) => [...prev, ...incoming]);
-          setRelatedPage(nextPage);
-        } else {
-          setHasMoreRelated(false);
         }
-      } else {
-        setHasMoreRelated(false);
+        setRelatedPage(nextPage);
       }
     } catch (err) {
       console.warn('Error loading more related videos:', err);
     } finally {
       setLoadingMoreRelated(false);
     }
-  }, [loadingMoreRelated, hasMoreRelated, relatedPage, video, relatedVideos, extraRelated]);
+  }, [loadingMoreRelated, relatedPage, video, relatedVideos, extraRelated]);
+
+  // Track user scroll before loading secondary batches of related videos
+  const [userHasScrolled, setUserHasScrolled] = useState(false);
 
   useEffect(() => {
+    const handlePageScroll = () => {
+      if (window.scrollY > 100) {
+        setUserHasScrolled(true);
+      }
+    };
+    window.addEventListener('scroll', handlePageScroll, { passive: true });
+    return () => window.removeEventListener('handlePageScroll', handlePageScroll);
+  }, []);
+
+  useEffect(() => {
+    // Strictly wait until user has scrolled down before loading subsequent batches
+    if (!userHasScrolled) return;
     const sentinel = relatedSentinelRef.current;
     if (!sentinel) return;
 
@@ -189,43 +225,15 @@ export default function VideoPlayer({
           fetchMoreRelated();
         }
       },
-      { rootMargin: '300px' }
+      { rootMargin: '80px' }
     );
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [fetchMoreRelated]);
+  }, [userHasScrolled, fetchMoreRelated]);
 
-  // Audio carrier engine: keeps audio hardware pipe & MediaSession active in OS
-  const ensureAudioCarrier = useCallback(() => {
-    try {
-      if (audioAnchorRef.current) {
-        audioAnchorRef.current.play().catch(() => {});
-      }
-    } catch (_) {}
-
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) {
-        if (!audioContextRef.current) {
-          const ctx = new AudioCtx();
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          gain.gain.value = 0.0001; // virtually inaudible carrier
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start();
-          audioContextRef.current = ctx;
-        } else if (audioContextRef.current.state === 'suspended') {
-          audioContextRef.current.resume().catch(() => {});
-        }
-      }
-    } catch (_) {}
-  }, []);
-
-  // Multi-tier Screen Wake Lock API & NoSleep fallback to prevent phone / PC display sleep while playing
+  // Screen Wake Lock API to prevent phone / PC display sleep while playing in foreground
   const requestWakeLock = useCallback(async () => {
-    // 1. Native Screen Wake Lock API
     if ('wakeLock' in navigator && document.visibilityState === 'visible' && !wakeLockRef.current) {
       try {
         wakeLockRef.current = await navigator.wakeLock.request('screen');
@@ -235,16 +243,12 @@ export default function VideoPlayer({
       } catch (_) { }
     }
 
-    // 2. Continuous Video Keep-Awake fallback (100% works on iOS Safari & Android Chrome)
     try {
       if (keepAwakeVideoRef.current && keepAwakeVideoRef.current.paused) {
-        keepAwakeVideoRef.current.play().catch(() => {});
+        keepAwakeVideoRef.current.play().catch(() => { });
       }
-    } catch (_) {}
-
-    // 3. Audio session keepalive
-    ensureAudioCarrier();
-  }, [ensureAudioCarrier]);
+    } catch (_) { }
+  }, []);
 
   const releaseWakeLock = useCallback(() => {
     if (wakeLockRef.current) {
@@ -254,7 +258,7 @@ export default function VideoPlayer({
     if (keepAwakeVideoRef.current) {
       try {
         keepAwakeVideoRef.current.pause();
-      } catch (_) {}
+      } catch (_) { }
     }
   }, []);
 
@@ -269,7 +273,6 @@ export default function VideoPlayer({
         });
         return;
       } else if (autoplay && upNextVideo) {
-        // Finished all playlist videos, smoothly start playing up next video
         onNotify(`Finished ${playlistContext.title}. Playing up next: ${upNextVideo.title.slice(0, 30)}...`);
         onSelectVideo(upNextVideo, null);
         return;
@@ -285,15 +288,15 @@ export default function VideoPlayer({
     }
   }, [isPlaylistMode, playlistNextVideo, playlistContext, autoplay, upNextVideo, nextVideo, onNotify, onSelectVideo]);
 
-  // Handle video end state (Plays up next after playlist finishes if autoplay is on, or loops)
+  // Handle video end state
   const handleVideoEnded = useCallback(() => {
     if (isLooping) {
-      if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
-        playerRef.current.seekTo(0, true);
-        playerRef.current.playVideo();
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+        videoRef.current.play().catch(() => { });
         setIsPlaying(true);
-        return;
       }
+      return;
     }
     if (autoplay) {
       if (isPlaylistMode) {
@@ -306,312 +309,296 @@ export default function VideoPlayer({
     }
   }, [isLooping, autoplay, isPlaylistMode, playlistNextVideo, upNextVideo, nextVideo, playNextVideo]);
 
-  const handleVideoEndedRef = useRef(null);
-  handleVideoEndedRef.current = handleVideoEnded;
-
-  // Load YouTube IFrame API and initialize player (strictly only on video ID change)
-  useEffect(() => {
-    let isMounted = true;
-    const vId = video.videoId || video._id;
-    setCurrentTime(0);
-    setDuration(0);
-    setIsPlaying(true);
-    shouldBePlayingRef.current = true;
-
-    const setupPlayer = () => {
-      if (!isMounted) return;
-      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
-        try {
-          playerRef.current.destroy();
-        } catch (_) { }
-      }
-
-      try {
-        playerRef.current = new window.YT.Player(`yt-player-target-${vId}`, {
-          videoId: vId,
-          playerVars: {
-            autoplay: 1,
-            controls: 0, // Removes native controls and hides the top title bar!
-            disablekb: 1,
-            fs: 0,
-            iv_load_policy: 3,
-            modestbranding: 1,
-            rel: 0,
-            showinfo: 0,
-            playsinline: 1,
-            cc_load_policy: 0, // Closed captions disabled as requested
-          },
-          events: {
-            onReady: (e) => {
-              if (!isMounted) return;
-              e.target.playVideo();
-              shouldBePlayingRef.current = true;
-              ensureAudioCarrier();
-              requestWakeLock();
-              const dur = e.target.getDuration();
-              if (dur) setDuration(dur);
-
-              try {
-                if (typeof e.target.unloadModule === 'function') {
-                  e.target.unloadModule('captions');
-                }
-                if (typeof e.target.setOption === 'function') {
-                  e.target.setOption('captions', 'track', {});
-                }
-              } catch (_) { }
-            },
-            onStateChange: (e) => {
-              if (!isMounted) return;
-              // 0: ended, 1: playing, 2: paused, 3: buffering
-              if (e.data === 0) {
-                handleVideoEndedRef.current?.();
-              } else if (e.data === 1) {
-                setIsPlaying(true);
-                shouldBePlayingRef.current = true;
-                if ('mediaSession' in navigator) {
-                  try {
-                    navigator.mediaSession.playbackState = 'playing';
-                  } catch (_) {}
-                }
-                ensureAudioCarrier();
-                requestWakeLock();
-              } else if (e.data === 2) {
-                // If browser/OS paused playback due to minimize or screen off, auto-play immediately!
-                if (document.hidden && shouldBePlayingRef.current) {
-                  ensureAudioCarrier();
-                  setIsPlaying(true);
-                  if ('mediaSession' in navigator) {
-                    try {
-                      navigator.mediaSession.playbackState = 'playing';
-                    } catch (_) {}
-                  }
-
-                  try {
-                    playerRef.current?.playVideo();
-                  } catch (_) {}
-
-                  // Rapid bursts of automatic re-play commands so playback never stops
-                  [30, 90, 200, 450, 900].forEach((delay) => {
-                    setTimeout(() => {
-                      if (shouldBePlayingRef.current && document.hidden) {
-                        try {
-                          playerRef.current?.playVideo();
-                        } catch (_) {}
-                      }
-                    }, delay);
-                  });
-                  return;
-                }
-                setIsPlaying(false);
-                if ('mediaSession' in navigator) {
-                  try {
-                    navigator.mediaSession.playbackState = 'paused';
-                  } catch (_) {}
-                }
-                releaseWakeLock();
-                audioAnchorRef.current?.pause();
-              }
-            },
-            onApiChange: () => { },
-          },
-        });
-      } catch (err) {
-        console.error('Error creating YouTube player:', err);
-      }
-    };
-
-    if (window.YT && window.YT.Player) {
-      setupPlayer();
-    } else {
-      const prevCallback = window.onYouTubeIframeAPIReady;
-      window.onYouTubeIframeAPIReady = () => {
-        if (prevCallback) prevCallback();
-        setupPlayer();
-      };
-      if (!document.getElementById('yt-iframe-api-script')) {
-        const script = document.createElement('script');
-        script.id = 'yt-iframe-api-script';
-        script.src = 'https://www.youtube.com/iframe_api';
-        document.body.appendChild(script);
-      }
-    }
-
-    // Polling interval for timeline progress and completion check
-    intervalRef.current = setInterval(() => {
-      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-        try {
-          const cur = playerRef.current.getCurrentTime() || 0;
-          const dur = playerRef.current.getDuration() || 0;
-          setCurrentTime(cur);
-          if (dur > 0 && dur !== duration) setDuration(dur);
-
-          // Sync captions status
-          try {
-            const track = playerRef.current.getOption('captions', 'track');
-            const hasTrack = Boolean(track && (track.languageCode || track.displayName || track.languageName || Object.keys(track).length > 0));
-            setIsCCActive((prev) => (prev !== hasTrack ? hasTrack : prev));
-          } catch (_) { }
-
-          // Backup check for video ending
-          if (dur > 0 && cur >= dur - 0.5) {
-            handleVideoEndedRef.current?.();
-          }
-        } catch (_) { }
-      }
-    }, 500);
-
-    return () => {
-      isMounted = false;
-      releaseWakeLock();
-      audioAnchorRef.current?.pause();
-      if (audioContextRef.current && audioContextRef.current.state === 'running') {
-        audioContextRef.current.suspend().catch(() => {});
-      }
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
-        try {
-          playerRef.current.destroy();
-        } catch (_) { }
-      }
-    };
-  }, [video.videoId || video._id, requestWakeLock, releaseWakeLock, ensureAudioCarrier]);
-
-  // Periodic Screen Wake Lock Heartbeat (ensures screen never sleeps while playing)
-  useEffect(() => {
-    if (!isPlaying) return;
-    const heartbeat = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        if (!wakeLockRef.current) {
-          requestWakeLock();
-        }
-        if (keepAwakeVideoRef.current && keepAwakeVideoRef.current.paused) {
-          keepAwakeVideoRef.current.play().catch(() => {});
-        }
-      }
-    }, 12000);
-
-    return () => clearInterval(heartbeat);
-  }, [isPlaying, requestWakeLock]);
-
-  // Web Worker Background Watchdog:
-  // Automatically forces the video to keep playing when minimized or when the screen turns off,
-  // completely bypassing mobile browser background timer throttling!
-  useEffect(() => {
-    let worker = null;
-    try {
-      const workerBlob = new Blob(
-        [
-          `let interval = null;
-          self.onmessage = function(e) {
-            if (e.data === 'start') {
-              if (!interval) {
-                interval = setInterval(function() {
-                  self.postMessage('ping');
-                }, 500);
-              }
-            } else if (e.data === 'stop') {
-              if (interval) {
-                clearInterval(interval);
-                interval = null;
-              }
-            }
-          };`
-        ],
-        { type: 'application/javascript' }
-      );
-      worker = new Worker(URL.createObjectURL(workerBlob));
-      backgroundWorkerRef.current = worker;
-
-      worker.onmessage = (e) => {
-        if (e.data === 'ping') {
-          if (shouldBePlayingRef.current && document.hidden) {
-            if (playerRef.current && typeof playerRef.current.getPlayerState === 'function') {
-              try {
-                const state = playerRef.current.getPlayerState();
-                if (state !== 1 && state !== 3) {
-                  playerRef.current.playVideo();
-                }
-              } catch (_) {}
-            }
-            try {
-              if (audioAnchorRef.current && audioAnchorRef.current.paused) {
-                audioAnchorRef.current.play().catch(() => {});
-              }
-            } catch (_) {}
-          }
-        }
-      };
-
-      worker.postMessage('start');
-    } catch (err) {
-      console.warn('Background worker error:', err);
-    }
-
-    return () => {
-      if (worker) {
-        worker.postMessage('stop');
-        worker.terminate();
-        backgroundWorkerRef.current = null;
-      }
-    };
+  // Action Flash Feedback
+  const triggerFlash = useCallback((type) => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setActionFlash(type);
+    flashTimerRef.current = setTimeout(() => {
+      setActionFlash(null);
+    }, 550);
   }, []);
 
-  // Automatically plays video when app is minimized or screen turns off
-  useEffect(() => {
-    const triggerAutoResume = () => {
-      if (!shouldBePlayingRef.current) return;
-      ensureAudioCarrier();
-      if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
-        try {
-          playerRef.current.playVideo();
-        } catch (_) {}
+  // UI Ripple feedback for double-tap seeking
+  const triggerRipple = useCallback((direction) => {
+    if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
+    setRipple(direction);
+    rippleTimerRef.current = setTimeout(() => {
+      setRipple(null);
+    }, 650);
+  }, []);
+
+  // Toggle Play / Pause (Keeps visual video and audio track strictly synchronized)
+  const togglePlayPause = useCallback((forcePlay = null) => {
+    const vid = videoRef.current;
+    const aud = bgAudioRef.current;
+    if (!vid) return;
+
+    const isCurrentlyPlaying = document.hidden && aud && !aud.paused ? true : !vid.paused;
+    const shouldPlay = forcePlay !== null ? forcePlay : !isCurrentlyPlaying;
+
+    shouldBePlayingRef.current = shouldPlay;
+
+    if (shouldPlay) {
+      vid.play().catch(() => { });
+      if (aud) {
+        aud.currentTime = vid.currentTime;
+        aud.volume = isMuted ? 0 : volume / 100;
+        aud.muted = isMuted;
+        aud.playbackRate = vid.playbackRate || playbackSpeed;
+        aud.play().catch(() => { });
       }
-      [30, 90, 200, 450, 900].forEach((ms) => {
-        setTimeout(() => {
-          if (shouldBePlayingRef.current && playerRef.current && typeof playerRef.current.playVideo === 'function') {
-            try {
-              playerRef.current.playVideo();
-            } catch (_) {}
-          }
-        }, ms);
-      });
+      setIsPlaying(true);
+      requestWakeLock();
+      triggerFlash('play');
+    } else {
+      vid.pause();
+      if (aud) aud.pause();
+      setIsPlaying(false);
+      releaseWakeLock();
+      triggerFlash('pause');
+    }
+  }, [requestWakeLock, releaseWakeLock, triggerFlash, isMuted, volume, playbackSpeed]);
+
+  // Seek relative (forward / backward seconds)
+  const seekRelative = useCallback((seconds) => {
+    const vid = videoRef.current;
+    const aud = bgAudioRef.current;
+    if (!vid) return;
+
+    const activeEl = document.hidden && aud && !aud.paused ? aud : vid;
+    const cur = activeEl.currentTime || 0;
+    const dur = activeEl.duration || duration || 0;
+    const target = Math.max(0, Math.min(dur || 999999, cur + seconds));
+
+    vid.currentTime = target;
+    if (aud) aud.currentTime = target;
+    setCurrentTime(target);
+
+    if (seconds < 0) {
+      triggerRipple('left');
+    } else {
+      triggerRipple('right');
+    }
+  }, [duration, triggerRipple]);
+
+  // Native HTML5 <video> Event Handlers
+  const handleVideoPlay = () => {
+    setIsPlaying(true);
+    shouldBePlayingRef.current = true;
+    requestWakeLock();
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'playing';
+      } catch (_) { }
+    }
+  };
+
+  const handleVideoPause = () => {
+    // Only register pause if not in background and user actually stopped playback
+    if (!document.hidden && !shouldBePlayingRef.current) {
+      setIsPlaying(false);
+      releaseWakeLock();
+      if ('mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.playbackState = 'paused';
+        } catch (_) { }
+      }
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    if (videoRef.current && !document.hidden) {
+      const vTime = videoRef.current.currentTime || 0;
+      setCurrentTime(vTime);
+      const aud = bgAudioRef.current;
+      if (aud && Math.abs(vTime - aud.currentTime) > 0.25) {
+        aud.currentTime = vTime;
+      }
+    }
+  };
+
+  const handleAudioTimeUpdate = () => {
+    if (bgAudioRef.current && document.hidden) {
+      setCurrentTime(bgAudioRef.current.currentTime || 0);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) {
+      const dur = videoRef.current.duration;
+      if (dur && !isNaN(dur)) {
+        setDuration(dur);
+      }
+      videoRef.current.muted = true; // Video track is muted so browser never blocks visual autoplay and avoids dual audio
+      videoRef.current.playbackRate = playbackSpeed;
+      setIsBuffering(false);
+
+      if (shouldBePlayingRef.current) {
+        videoRef.current.play().catch(() => { });
+        if (bgAudioRef.current) {
+          bgAudioRef.current.volume = isMuted ? 0 : volume / 100;
+          bgAudioRef.current.muted = isMuted;
+          bgAudioRef.current.playbackRate = playbackSpeed;
+          bgAudioRef.current.play().catch(() => { });
+        }
+      }
+    }
+  };
+
+  const handleVideoError = () => {
+    setIsBuffering(false);
+    console.warn('Direct stream error on <video>, activating resilient embed fallback...');
+    setUseEmbedFallback(true);
+  };
+
+  // Switch video stream on video change - Unmuted by default
+  useEffect(() => {
+    setCurrentTime(0);
+    setDuration(0);
+    setIsBuffering(true);
+    setIsPlaying(true);
+    setUseEmbedFallback(false);
+    shouldBePlayingRef.current = true;
+
+    if (videoRef.current) {
+      videoRef.current.load();
+      videoRef.current.muted = true;
+      videoRef.current.playbackRate = playbackSpeed;
+      videoRef.current.play().catch(() => { });
+    }
+
+    if (bgAudioRef.current) {
+      bgAudioRef.current.load();
+      bgAudioRef.current.volume = isMuted ? 0 : volume / 100;
+      bgAudioRef.current.muted = isMuted;
+      bgAudioRef.current.playbackRate = playbackSpeed;
+      if (shouldBePlayingRef.current) {
+        bgAudioRef.current.play().catch(() => { });
+      }
+    }
+  }, [vId]);
+
+  // Document-level user gesture unlocker for unmuted audio
+  useEffect(() => {
+    const unlockAudioOnGesture = () => {
+      const aud = bgAudioRef.current;
+      if (aud && shouldBePlayingRef.current && !isMuted && aud.paused) {
+        aud.muted = false;
+        aud.volume = volume / 100;
+        aud.play().catch(() => { });
+      }
+      const vid = videoRef.current;
+      if (vid && shouldBePlayingRef.current && vid.paused) {
+        vid.play().catch(() => { });
+      }
     };
 
-    const handleVisibility = () => {
-      if (document.hidden) {
-        // Minimized / screen turned off: automatically keep playing!
-        triggerAutoResume();
-      } else {
-        // Foreground restored: re-engage wake lock and resume
+    window.addEventListener('pointerdown', unlockAudioOnGesture, { passive: true });
+    window.addEventListener('touchstart', unlockAudioOnGesture, { passive: true });
+    window.addEventListener('click', unlockAudioOnGesture, { passive: true });
+    window.addEventListener('keydown', unlockAudioOnGesture, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudioOnGesture);
+      window.removeEventListener('touchstart', unlockAudioOnGesture);
+      window.removeEventListener('click', unlockAudioOnGesture);
+      window.removeEventListener('keydown', unlockAudioOnGesture);
+    };
+  }, [isMuted, volume]);
+
+  // Seamless Background Play Engine:
+  // When switching tabs or minimizing, background audio plays continuously and resumes visual in foreground
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const isHidden = document.hidden;
+      const vid = videoRef.current;
+      const aud = bgAudioRef.current;
+      if (!vid || !aud) return;
+
+      if (isHidden) {
+        // Tab switched to background or phone screen turned off:
+        // Keep background audio playing at exact timestamp and proper unmuted volume
         if (shouldBePlayingRef.current) {
+          aud.currentTime = vid.currentTime;
+          aud.volume = isMuted ? 0 : volume / 100;
+          aud.muted = isMuted;
+          aud.playbackRate = vid.playbackRate || playbackSpeed;
+          if (aud.paused) {
+            aud.play().catch((e) => console.warn('Background audio play:', e));
+          }
+        }
+      } else {
+        // Tab restored / user brought browser back to foreground:
+        // Synchronize visual video element timestamp with the continuously playing audio track
+        if (shouldBePlayingRef.current) {
+          const timestamp = !aud.paused ? aud.currentTime : vid.currentTime;
+          vid.currentTime = timestamp;
+          vid.playbackRate = aud.playbackRate || playbackSpeed;
+          if (vid.paused) {
+            vid.play().catch(() => { });
+          }
+          if (aud.paused && !isMuted) {
+            aud.play().catch(() => { });
+          }
+          setIsPlaying(true);
           requestWakeLock();
-          if (keepAwakeVideoRef.current && keepAwakeVideoRef.current.paused) {
-            keepAwakeVideoRef.current.play().catch(() => {});
-          }
-          if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
-            try {
-              playerRef.current.playVideo();
-              setIsPlaying(true);
-            } catch (_) {}
-          }
         }
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('pagehide', triggerAutoResume);
-    window.addEventListener('blur', triggerAutoResume);
-    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [requestWakeLock, isMuted, volume, playbackSpeed]);
+
+  // Full MediaSession API Integration for Lockscreen & Notification Controls
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: video.title || 'Playing Video',
+      artist: video.channelName || 'YouTube',
+      album: 'Bintube',
+      artwork: [
+        {
+          src: video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
+          sizes: '512x512',
+          type: 'image/jpeg',
+        },
+      ],
+    });
+
+    const actionHandlers = [
+      ['play', () => togglePlayPause(true)],
+      ['pause', () => togglePlayPause(false)],
+      ['seekbackward', (details) => seekRelative(-(details.seekOffset || 10))],
+      ['seekforward', (details) => seekRelative(details.seekOffset || 10)],
+      ['previoustrack', () => seekRelative(-10)],
+      ['nexttrack', () => playNextVideo()],
+      ['seekto', (details) => {
+        if (details.seekTime !== undefined) {
+          if (videoRef.current) videoRef.current.currentTime = details.seekTime;
+          if (bgAudioRef.current) bgAudioRef.current.currentTime = details.seekTime;
+          setCurrentTime(details.seekTime);
+        }
+      }],
+      ['stop', () => togglePlayPause(false)],
+    ];
+
+    for (const [action, handler] of actionHandlers) {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch (_) { }
+    }
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('pagehide', triggerAutoResume);
-      window.removeEventListener('blur', triggerAutoResume);
-      window.removeEventListener('focus', handleVisibility);
+      for (const [action] of actionHandlers) {
+        try {
+          navigator.mediaSession.setActionHandler(action, null);
+        } catch (_) { }
+      }
     };
-  }, [requestWakeLock, ensureAudioCarrier]);
-
-  const settingsMenuRef = useRef(null);
+  }, [video, vId, togglePlayPause, seekRelative, playNextVideo]);
 
   // Close settings popup when clicking outside
   useEffect(() => {
@@ -630,283 +617,111 @@ export default function VideoPlayer({
     };
   }, [showSettings]);
 
+  // Autohide controls delay: 4s on mobile devices, 2.8s on desktop
+  const getHideDelay = () => {
+    const isMobile =
+      typeof window !== 'undefined' &&
+      (window.innerWidth <= 768 || 'ontouchstart' in window);
+    return isMobile ? 4000 : 2800;
+  };
+
+  const handleLockedTap = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    setShowUnlockPill(true);
+    if (unlockPillTimerRef.current) clearTimeout(unlockPillTimerRef.current);
+    unlockPillTimerRef.current = setTimeout(() => {
+      setShowUnlockPill(false);
+    }, 2500); // Minimal lock indicator hides automatically after 2.5s
+  };
+
+  const handleUnlock = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    setIsLocked(false);
+    setShowUnlockPill(false);
+    setShowControls(true);
+    if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
+    hideControlsTimerRef.current = setTimeout(() => {
+      setShowControls(false);
+    }, getHideDelay());
+  };
+
   // Autohide controls logic
   const handleMouseMove = () => {
+    if (isLocked) return;
     setShowControls(true);
     if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
     if (isPlaying && !showSettings) {
       hideControlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
-      }, 2800);
+      }, getHideDelay());
     }
   };
 
   const handleMouseLeave = () => {
-    if (isPlaying && !showSettings) {
+    if (isPlaying && !showSettings && !isLocked) {
       setShowControls(false);
     }
   };
 
-  // UI Ripple feedback for double-tap seeking
-  const triggerRipple = (direction) => {
-    if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
-    setRipple(direction);
-    rippleTimerRef.current = setTimeout(() => {
-      setRipple(null);
-    }, 650);
-  };
-
-  // Center flash icon feedback for play/pause
-  const triggerFlash = (action) => {
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    setActionFlash(action);
-    flashTimerRef.current = setTimeout(() => {
-      setActionFlash(null);
-    }, 550);
-  };
-
-  // Relative Seek (+10s, -10s, +5s, etc.)
-  const seekRelative = useCallback((offset) => {
-    if (!playerRef.current) return;
-    const target = Math.max(0, Math.min(duration || 0, currentTime + offset));
-    setCurrentTime(target);
-    try {
-      playerRef.current.seekTo(target, true);
-    } catch (_) { }
-    if (offset > 0) {
-      triggerRipple('right');
-    } else {
-      triggerRipple('left');
-    }
-  }, [currentTime, duration]);
-
-  // Speed selection handler
-  const changePlaybackSpeed = useCallback((speed) => {
-    setPlaybackSpeed(speed);
-    previousSpeedRef.current = speed;
-    if (playerRef.current && typeof playerRef.current.setPlaybackRate === 'function') {
-      try {
-        playerRef.current.setPlaybackRate(speed);
-      } catch (_) { }
-    }
-    if (typeof onNotify === 'function') {
-      onNotify(`Speed: ${speed === 1 ? 'Normal' : `${speed}x`}`);
-    }
-  }, [onNotify]);
-
-  // Play / Pause toggle
-  const togglePlayPause = useCallback(() => {
-    if (!playerRef.current) return;
-    try {
-      if (isPlaying) {
-        shouldBePlayingRef.current = false;
-        playerRef.current.pauseVideo();
-        setIsPlaying(false);
-        releaseWakeLock();
-        audioAnchorRef.current?.pause();
-        if (audioContextRef.current && audioContextRef.current.state === 'running') {
-          audioContextRef.current.suspend().catch(() => {});
-        }
-        triggerFlash('pause');
-      } else {
-        shouldBePlayingRef.current = true;
-        playerRef.current.playVideo();
-        setIsPlaying(true);
-        ensureAudioCarrier();
-        requestWakeLock();
-        triggerFlash('play');
-      }
-    } catch (_) { }
-  }, [isPlaying, releaseWakeLock, requestWakeLock, ensureAudioCarrier]);
-
-  // Set up Media Session API for OS-level background playback controls
-  useEffect(() => {
-    if (!('mediaSession' in navigator) || !video) return;
-
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: video.title || 'YouTube Video',
-        artist: video.channelName || 'YouTube Creator',
-        album: 'Bintube',
-        artwork: [
-          {
-            src:
-              video.thumbnailUrl ||
-              `https://i.ytimg.com/vi/${video.videoId || video._id}/hqdefault.jpg`,
-            sizes: '512x512',
-            type: 'image/jpeg',
-          },
-        ],
-      });
-
-      navigator.mediaSession.setActionHandler('play', () => {
-        shouldBePlayingRef.current = true;
-        setIsPlaying(true);
-        if ('mediaSession' in navigator) {
-          try {
-            navigator.mediaSession.playbackState = 'playing';
-          } catch (_) {}
-        }
-        ensureAudioCarrier();
-        if (playerRef.current && typeof playerRef.current.playVideo === 'function') {
-          try {
-            playerRef.current.playVideo();
-          } catch (_) {}
-        }
-        requestWakeLock();
-      });
-
-      navigator.mediaSession.setActionHandler('pause', () => {
-        shouldBePlayingRef.current = false;
-        setIsPlaying(false);
-        if ('mediaSession' in navigator) {
-          try {
-            navigator.mediaSession.playbackState = 'paused';
-          } catch (_) {}
-        }
-        if (playerRef.current && typeof playerRef.current.pauseVideo === 'function') {
-          try {
-            playerRef.current.pauseVideo();
-          } catch (_) {}
-        }
-        releaseWakeLock();
-        audioAnchorRef.current?.pause();
-        if (audioContextRef.current && audioContextRef.current.state === 'running') {
-          audioContextRef.current.suspend().catch(() => {});
-        }
-      });
-
-      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-        const offset = details.seekOffset || 10;
-        seekRelative(-offset);
-      });
-
-      navigator.mediaSession.setActionHandler('seekforward', (details) => {
-        const offset = details.seekOffset || 10;
-        seekRelative(offset);
-      });
-
-      navigator.mediaSession.setActionHandler('seekto', (details) => {
-        if (details.seekTime != null && playerRef.current && typeof playerRef.current.seekTo === 'function') {
-          playerRef.current.seekTo(details.seekTime, true);
-          setCurrentTime(details.seekTime);
-        }
-      });
-
-      if (nextVideo) {
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-          playNextVideo();
-        });
-      }
-
-      navigator.mediaSession.setActionHandler('previoustrack', () => {
-        seekRelative(-10);
-      });
-    } catch (_) { }
-
-    return () => {
-      try {
-        if ('mediaSession' in navigator) {
-          navigator.mediaSession.setActionHandler('play', null);
-          navigator.mediaSession.setActionHandler('pause', null);
-          navigator.mediaSession.setActionHandler('nexttrack', null);
-          navigator.mediaSession.setActionHandler('previoustrack', null);
-          navigator.mediaSession.setActionHandler('seekbackward', null);
-          navigator.mediaSession.setActionHandler('seekforward', null);
-          navigator.mediaSession.setActionHandler('seekto', null);
-        }
-      } catch (_) { }
-    };
-  }, [video, nextVideo, playNextVideo, currentTime, duration, requestWakeLock, releaseWakeLock, ensureAudioCarrier, seekRelative]);
-
-  // Sync playbackState with OS media controller
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-  }, [isPlaying]);
-
-  // Sync position state with OS lock screen scrubber
-  useEffect(() => {
-    if (!('mediaSession' in navigator) || !('setPositionState' in navigator.mediaSession)) return;
-    if (duration > 0 && currentTime >= 0) {
-      try {
-        navigator.mediaSession.setPositionState({
-          duration: Math.max(0, duration),
-          playbackRate: playbackSpeed || 1,
-          position: Math.min(Math.max(0, currentTime), duration),
-        });
-      } catch (_) { }
-    }
-  }, [currentTime, duration, playbackSpeed]);
-
-  // Pointer / Touch Handlers for Hold to 2X & Double-Tap Seeking
+  // Hold to 2X Speed Pointer Handlers
   const handlePointerDown = (e) => {
-    if (e.button && e.button !== 0) return;
+    if (isLocked) {
+      handleLockedTap(e);
+      return;
+    }
     hasHeldRef.current = false;
-    isHolding2xRef.current = false;
-
-    // Detect hold for > 350ms to engage 2X speed
+    previousSpeedRef.current = playbackSpeed;
     holdTimerRef.current = setTimeout(() => {
-      isHolding2xRef.current = true;
       hasHeldRef.current = true;
+      isHolding2xRef.current = true;
       setIsHolding2x(true);
-      if (playerRef.current && typeof playerRef.current.setPlaybackRate === 'function') {
-        try {
-          playerRef.current.setPlaybackRate(2);
-        } catch (_) { }
+      if (videoRef.current) {
+        videoRef.current.playbackRate = 2;
       }
-    }, 350);
+      if (bgAudioRef.current) {
+        bgAudioRef.current.playbackRate = 2;
+      }
+    }, 400);
   };
 
   const handlePointerUp = (e) => {
+    if (isLocked) return;
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current);
       holdTimerRef.current = null;
     }
-
     if (isHolding2xRef.current) {
-      // Revert from 2X hold mode
       isHolding2xRef.current = false;
       setIsHolding2x(false);
-      if (playerRef.current && typeof playerRef.current.setPlaybackRate === 'function') {
-        try {
-          playerRef.current.setPlaybackRate(previousSpeedRef.current || 1);
-        } catch (_) { }
+      if (videoRef.current) {
+        videoRef.current.playbackRate = previousSpeedRef.current || 1;
+      }
+      if (bgAudioRef.current) {
+        bgAudioRef.current.playbackRate = previousSpeedRef.current || 1;
       }
       return;
     }
 
-    if (hasHeldRef.current) {
-      hasHeldRef.current = false;
-      return;
-    }
-
-    // Handle Click vs Double Tap (Left/Right)
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const clientX = e.clientX ?? (e.changedTouches && e.changedTouches[0]?.clientX);
-    if (clientX === undefined) return;
-    const relativeX = clientX - rect.left;
-    const isLeft = relativeX < rect.width * 0.35;
-    const isRight = relativeX > rect.width * 0.65;
+    if (hasHeldRef.current) return;
 
     const now = Date.now();
-    if (lastTapRef.current && (now - lastTapRef.current.time) < 320) {
-      // Double tap detected!
-      if (singleTapTimerRef.current) {
-        clearTimeout(singleTapTimerRef.current);
-        singleTapTimerRef.current = null;
-      }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX || (e.changedTouches && e.changedTouches[0]?.clientX) || 0;
+    const relativeX = (clickX - rect.left) / rect.width;
+    const isRight = relativeX > 0.65;
+    const isLeft = relativeX < 0.35;
+
+    if (lastTapRef.current && now - lastTapRef.current.time < 300) {
+      if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
       lastTapRef.current = null;
       if (isRight) {
-        seekRelative(10); // 10s forward
+        seekRelative(10);
       } else if (isLeft) {
-        seekRelative(-10); // 10s backward
+        seekRelative(-10);
       } else {
         toggleFullscreen();
       }
     } else {
-      // First tap: buffer for single click (toggle play/pause)
       lastTapRef.current = { time: now, x: relativeX };
       singleTapTimerRef.current = setTimeout(() => {
         togglePlayPause();
@@ -923,10 +738,11 @@ export default function VideoPlayer({
     if (isHolding2xRef.current) {
       isHolding2xRef.current = false;
       setIsHolding2x(false);
-      if (playerRef.current && typeof playerRef.current.setPlaybackRate === 'function') {
-        try {
-          playerRef.current.setPlaybackRate(previousSpeedRef.current || 1);
-        } catch (_) { }
+      if (videoRef.current) {
+        videoRef.current.playbackRate = previousSpeedRef.current || 1;
+      }
+      if (bgAudioRef.current) {
+        bgAudioRef.current.playbackRate = previousSpeedRef.current || 1;
       }
     }
   };
@@ -939,51 +755,21 @@ export default function VideoPlayer({
     }
     const nextState = !isCCActive;
     setIsCCActive(nextState);
-
-    if (playerRef.current) {
-      try {
-        if (nextState) {
-          if (typeof playerRef.current.loadModule === 'function') {
-            playerRef.current.loadModule('captions');
-          }
-          let trackList = [];
-          if (typeof playerRef.current.getOption === 'function') {
-            trackList = playerRef.current.getOption('captions', 'tracklist') || [];
-          }
-          const track = trackList.find(t => t.languageCode?.startsWith('en')) || trackList[0] || { languageCode: 'en' };
-          if (typeof playerRef.current.setOption === 'function') {
-            playerRef.current.setOption('captions', 'track', track);
-            playerRef.current.setOption('captions', 'fontSize', 1);
-          }
-        } else {
-          if (typeof playerRef.current.setOption === 'function') {
-            playerRef.current.setOption('captions', 'track', {});
-          }
-          if (typeof playerRef.current.unloadModule === 'function') {
-            playerRef.current.unloadModule('captions');
-          }
-        }
-      } catch (err) {
-        console.warn('Caption toggle error:', err);
-      }
-    }
-
     if (typeof onNotify === 'function') {
       onNotify(nextState ? 'Subtitles / CC turned on' : 'Subtitles turned off');
     }
   }, [isCCActive, onNotify]);
 
-  // Seek on scrubber (supports mouse click/move and mobile touch drag)
+  // Seek on scrubber
   const handleScrub = (e) => {
-    if (!progressTrackRef.current || !duration || !playerRef.current) return;
+    if (!progressTrackRef.current || !duration || !videoRef.current) return;
     const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
     const rect = progressTrackRef.current.getBoundingClientRect();
     const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const targetTime = pos * duration;
     setCurrentTime(targetTime);
-    try {
-      playerRef.current.seekTo(targetTime, true);
-    } catch (_) { }
+    videoRef.current.currentTime = targetTime;
+    if (bgAudioRef.current) bgAudioRef.current.currentTime = targetTime;
   };
 
   const handleProgressHover = (e) => {
@@ -994,33 +780,43 @@ export default function VideoPlayer({
     setHoverTime(pos * duration);
   };
 
-  // Volume
+  // Volume: Controls audio stream with instant un-mute restoration
   const handleVolumeChange = (e) => {
     const newVol = Number(e.target.value);
     setVolume(newVol);
-    if (playerRef.current && typeof playerRef.current.setVolume === 'function') {
-      try {
-        playerRef.current.setVolume(newVol);
-        if (newVol > 0 && isMuted) {
-          playerRef.current.unMute();
-          setIsMuted(false);
-        }
-      } catch (_) { }
+    const aud = bgAudioRef.current;
+    if (aud) {
+      aud.volume = newVol / 100;
+      if (newVol > 0) {
+        aud.muted = false;
+        setIsMuted(false);
+      } else {
+        aud.muted = true;
+        setIsMuted(true);
+      }
+    }
+    if (newVol > 0 && isMuted) {
+      setIsMuted(false);
     }
   };
 
   const toggleMute = useCallback(() => {
-    if (!playerRef.current) return;
-    try {
-      if (isMuted) {
-        playerRef.current.unMute();
-        setIsMuted(false);
-      } else {
-        playerRef.current.mute();
-        setIsMuted(true);
-      }
-    } catch (_) { }
-  }, [isMuted]);
+    const aud = bgAudioRef.current;
+    if (!aud) return;
+    if (isMuted) {
+      // Un-mute: restore volume if at zero, so audio is audible immediately
+      const restoredVol = volume === 0 ? 50 : volume;
+      setVolume(restoredVol);
+      aud.volume = restoredVol / 100;
+      aud.muted = false;
+      aud.play().catch(() => { });
+      setIsMuted(false);
+    } else {
+      // Mute audio
+      aud.muted = true;
+      setIsMuted(true);
+    }
+  }, [isMuted, volume]);
 
   // Fullscreen
   const toggleFullscreen = useCallback(() => {
@@ -1032,9 +828,10 @@ export default function VideoPlayer({
     }
   }, []);
 
-  // Keyboard Shortcuts (K to pause/play, J for +10s, L for -10s)
+  // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (isLocked) return;
       if (['input', 'textarea', 'select'].includes(document.activeElement?.tagName?.toLowerCase())) return;
 
       if (e.code === 'Space' || e.code === 'KeyK') {
@@ -1042,41 +839,30 @@ export default function VideoPlayer({
         togglePlayPause();
       } else if (e.code === 'KeyL') {
         e.preventDefault();
-        seekRelative(10); // 10s forward as requested
+        seekRelative(10);
       } else if (e.code === 'KeyJ') {
         e.preventDefault();
-        seekRelative(-10); // 10s backward as requested
+        seekRelative(-10);
       } else if (e.code === 'KeyM') {
         e.preventDefault();
         toggleMute();
       } else if (e.code === 'KeyF') {
         e.preventDefault();
         toggleFullscreen();
-      } else if (e.code === 'KeyC') {
+      } else if (e.code === 'KeyT') {
         e.preventDefault();
-        handleToggleCC();
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault();
-        seekRelative(5);
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault();
-        seekRelative(-5);
-      } else if (e.code === 'KeyN' && e.shiftKey) {
-        e.preventDefault();
-        playNextVideo();
+        setIsTheater((prev) => !prev);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlayPause, seekRelative, toggleMute, toggleFullscreen, handleToggleCC, playNextVideo]);
+  }, [togglePlayPause, seekRelative, toggleMute, toggleFullscreen, isLocked]);
 
-  // Social / Share via Native Web Share API (navigator.share)
+  // Social / Share via Native Web Share API
   const handleShare = async () => {
-    const vId = video?.videoId || video?._id;
-    if (!vId) return;
-    const origin = window.location.origin || 'http://localhost:5173';
-    const shareUrl = `${origin}/watch?v=${encodeURIComponent(vId)}`;
+    const shareOrigin = window.location.origin || 'http://localhost:5173';
+    const shareUrl = `${shareOrigin}/watch?v=${encodeURIComponent(vId)}`;
     const shareTitle = video?.title || 'Check out this video';
 
     if (navigator.share) {
@@ -1088,9 +874,7 @@ export default function VideoPlayer({
         });
         return;
       } catch (err) {
-        if (err && (err.name === 'AbortError' || err.code === 20)) {
-          return;
-        }
+        if (err && (err.name === 'AbortError' || err.code === 20)) return;
       }
     }
 
@@ -1101,7 +885,7 @@ export default function VideoPlayer({
           onNotify('Link copied to clipboard');
         }
         return;
-      } catch (_) {}
+      } catch (_) { }
     }
 
     try {
@@ -1134,7 +918,18 @@ export default function VideoPlayer({
     const nextVal = !isLooping;
     setIsLooping(nextVal);
     localStorage.setItem('yt_loop', String(nextVal));
+    if (videoRef.current) videoRef.current.loop = nextVal;
+    if (bgAudioRef.current) bgAudioRef.current.loop = nextVal;
     onNotify(nextVal ? 'Loop video is on' : 'Loop video is off');
+  };
+
+  const changePlaybackSpeed = (speed) => {
+    setPlaybackSpeed(speed);
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+    if (bgAudioRef.current) bgAudioRef.current.playbackRate = speed;
+    setShowSettings(false);
+    setSettingsView('main');
+    onNotify(`${speed}x speed`);
   };
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -1143,19 +938,90 @@ export default function VideoPlayer({
     <div className={`watch-page ${isTheater ? 'theater-layout' : ''}`}>
       {/* Primary Left Video Column */}
       <div className="watch-player-column">
-        {/* Full-width YouTube Player Container with Custom Controller (Image 3) */}
+        {/* Full-width YouTube Player Container with Custom Controller */}
         <div
           ref={containerRef}
-          className={`yt-custom-player-wrapper ${showControls || !isPlaying || showSettings ? 'controls-visible' : ''} ${isCCActive ? 'has-active-cc' : ''}`}
+          className={`yt-custom-player-wrapper ${(showControls || !isPlaying || showSettings) && !isLocked ? 'controls-visible' : ''} ${isLocked ? 'is-locked' : ''}`}
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
+          onTouchStart={handleMouseMove}
         >
-          {/* YouTube Target Element with Fixed Cropping Scaler */}
+          {/* Native HTML5 Video Element with resilient IFrame Fallback */}
           <div className="yt-video-embed-box">
-            <div className="yt-iframe-scaler">
-              <div id={`yt-player-target-${video.videoId || video._id}`} />
-            </div>
+            {useEmbedFallback ? (
+              <iframe
+                className="yt-html5-video"
+                src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(vId)}?autoplay=1&controls=0&playsinline=1&rel=0&modestbranding=1`}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                title={video.title}
+                style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'auto' }}
+              />
+            ) : (
+              <video
+                ref={videoRef}
+                className="yt-html5-video"
+                src={videoSrc}
+                poster={video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`}
+                autoPlay
+                playsInline
+                webkit-playsinline="true"
+                x-webkit-airplay="allow"
+                preload="auto"
+                loop={isLooping}
+                onPlay={handleVideoPlay}
+                onPause={handleVideoPause}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                onEnded={handleVideoEnded}
+                onWaiting={() => setIsBuffering(true)}
+                onPlaying={() => setIsBuffering(false)}
+                onCanPlay={() => {
+                  setIsBuffering(false);
+                  if (shouldBePlayingRef.current && videoRef.current?.paused) {
+                    videoRef.current.play().catch(() => { });
+                  }
+                }}
+                onError={handleVideoError}
+              />
+            )}
+
+            {/* Background Audio Playback Engine for Phone Minimizing / Screen Off */}
+            <audio
+              ref={bgAudioRef}
+              src={audioSrc}
+              preload="auto"
+              playsInline
+              loop={isLooping}
+              onTimeUpdate={handleAudioTimeUpdate}
+              onEnded={handleVideoEnded}
+            />
+
+            {/* Buffering Spinner Overlay */}
+            {isBuffering && (
+              <div className="yt-player-buffering-overlay">
+                <div className="spinner"></div>
+              </div>
+            )}
           </div>
+
+          {/* Screen Lock Overlay & Minimal Unlock Pill at Bottom */}
+          {isLocked && (
+            <div
+              className={`yt-locked-screen-overlay ${showUnlockPill ? 'visible' : ''}`}
+              onClick={handleLockedTap}
+            >
+              <button
+                type="button"
+                className="yt-unlock-pill"
+                onClick={handleUnlock}
+                title="Tap to unlock screen"
+              >
+                <UnlockIcon size={16} />
+                <span>Tap to unlock</span>
+              </button>
+            </div>
+          )}
 
           {/* Click to Play/Pause, Double-Tap to Seek & Hold to 2X overlay */}
           <div
@@ -1199,7 +1065,7 @@ export default function VideoPlayer({
             </div>
           )}
 
-          {/* BOTTOM CONTROLLER BAR (Matches Third Image Perfectly!) */}
+          {/* BOTTOM CONTROLLER BAR */}
           <div className="yt-controller-bar">
             {/* Red Scrubber Timeline */}
             <div
@@ -1244,7 +1110,7 @@ export default function VideoPlayer({
                 {/* Play / Pause button */}
                 <button
                   className="yt-ctrl-btn"
-                  onClick={togglePlayPause}
+                  onClick={() => togglePlayPause()}
                   title={isPlaying ? 'Pause (k)' : 'Play (k)'}
                 >
                   {isPlaying ? <PauseIcon size={22} /> : <PlayIcon size={22} />}
@@ -1282,6 +1148,12 @@ export default function VideoPlayer({
                     value={isMuted ? 0 : volume}
                     onChange={handleVolumeChange}
                     className="yt-volume-slider"
+                    style={{
+                      background:
+                        isMuted || volume === 0
+                          ? 'rgba(255, 255, 255, 0.25)'
+                          : `linear-gradient(to right, #ffffff ${volume}%, rgba(255, 255, 255, 0.25) ${volume}%)`,
+                    }}
                     title={`Volume ${isMuted ? 0 : volume}%`}
                   />
                 </div>
@@ -1318,122 +1190,134 @@ export default function VideoPlayer({
                       />
                       <div className="yt-settings-menu">
                         {settingsView === 'speed' ? (
-                        <div className="yt-settings-subpanel">
-                          <div
-                            className="yt-menu-header yt-submenu-header"
-                            onClick={() => setSettingsView('main')}
-                          >
-                            <span className="yt-back-arrow">‹</span>
-                            <span>Playback speed</span>
-                          </div>
+                          <div className="yt-settings-subpanel">
+                            <div
+                              className="yt-menu-header yt-submenu-header"
+                              onClick={() => setSettingsView('main')}
+                            >
+                              <span className="yt-back-arrow">‹</span>
+                              <span>Playback speed</span>
+                            </div>
 
-                          {/* Quick Speed Preset Chips */}
-                          <div className="yt-speed-presets-bar">
-                            {[0.5, 1, 1.25, 1.5, 2].map((spd) => (
-                              <button
-                                key={`chip-${spd}`}
-                                type="button"
-                                className={`yt-speed-preset-chip ${playbackSpeed === spd ? 'active' : ''}`}
-                                onClick={() => {
-                                  changePlaybackSpeed(spd);
-                                  setSettingsView('main');
-                                }}
-                              >
-                                {spd === 1 ? '1x' : `${spd}x`}
-                              </button>
-                            ))}
-                          </div>
+                            {/* Quick Speed Preset Chips */}
+                            <div className="yt-speed-presets-bar">
+                              {[0.5, 1, 1.25, 1.5, 2].map((spd) => (
+                                <button
+                                  key={`chip-${spd}`}
+                                  type="button"
+                                  className={`yt-speed-preset-chip ${playbackSpeed === spd ? 'active' : ''}`}
+                                  onClick={() => {
+                                    changePlaybackSpeed(spd);
+                                    setSettingsView('main');
+                                  }}
+                                >
+                                  {spd === 1 ? '1x' : `${spd}x`}
+                                </button>
+                              ))}
+                            </div>
 
-                          <div className="yt-settings-scroll-list">
-                            {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((spd) => (
-                              <div
-                                key={spd}
-                                className={`yt-menu-item ${playbackSpeed === spd ? 'active-speed' : ''}`}
-                                onClick={() => {
-                                  changePlaybackSpeed(spd);
-                                  setSettingsView('main');
-                                }}
-                              >
-                                <span className="yt-speed-val-label">
-                                  {spd === 1 ? 'Normal (1x)' : `${spd}x`}
+                            <div className="yt-settings-scroll-list">
+                              {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((spd) => (
+                                <div
+                                  key={spd}
+                                  className={`yt-menu-row ${playbackSpeed === spd ? 'active-row' : ''}`}
+                                  onClick={() => changePlaybackSpeed(spd)}
+                                >
+                                  <span>{spd === 1 ? 'Normal' : spd}</span>
+                                  <div className="yt-check-slot">
+                                    {playbackSpeed === spd && <CheckIcon size={16} />}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="yt-settings-mainpanel">
+                            <div className="yt-menu-header">Playback Settings</div>
+
+                            {/* Quality Row */}
+                            <div className="yt-menu-row yt-settings-row-interactive">
+                              <div className="yt-menu-row-left">
+                                <span className="yt-row-icon-badge">HD</span>
+                                <span>Quality</span>
+                              </div>
+                              <div className="yt-menu-row-right">
+                                <span className="yt-quality-pill">1080p HD</span>
+                              </div>
+                            </div>
+
+                            {/* Playback Speed row */}
+                            <div
+                              className="yt-menu-row yt-menu-row-navigable yt-settings-row-interactive"
+                              onClick={() => setSettingsView('speed')}
+                            >
+                              <div className="yt-menu-row-left">
+                                <SpeedometerIcon size={18} />
+                                <span>Playback speed</span>
+                              </div>
+                              <div className="yt-menu-row-right">
+                                <span className="yt-menu-val">
+                                  {playbackSpeed === 1 ? 'Normal' : `${playbackSpeed}x`}
                                 </span>
-                                {playbackSpeed === spd && (
-                                  <CheckIcon size={16} className="yt-check-active" />
-                                )}
+                                <span className="yt-forward-arrow">›</span>
                               </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="yt-settings-main-panel">
-                          <div className="yt-settings-header-row">
-                            <SettingsIcon size={16} />
-                            <span>Playback Settings</span>
-                          </div>
+                            </div>
 
-                          {/* Playback Speed Row */}
-                          <div
-                            className="yt-settings-row-interactive"
-                            onClick={() => setSettingsView('speed')}
-                            title="Change playback speed"
-                          >
-                            <div className="yt-row-left">
-                              <SpeedometerIcon size={17} />
-                              <span className="yt-row-title">Playback speed</span>
+                            {/* Loop Video toggle */}
+                            <div
+                              className="yt-menu-row yt-settings-row-interactive"
+                              onClick={handleToggleLoop}
+                              title="Loop video"
+                            >
+                              <div className="yt-menu-row-left">
+                                <LoopIcon size={18} />
+                                <span>Loop video</span>
+                              </div>
+                              <div className="yt-menu-row-right">
+                                <span className="yt-menu-val">{isLooping ? 'On' : 'Off'}</span>
+                              </div>
                             </div>
-                            <div className="yt-row-right">
-                              <span className="yt-speed-current-pill">
-                                {playbackSpeed === 1 ? 'Normal' : `${playbackSpeed}x`}
-                              </span>
-                              <span className="yt-menu-nav-arrow">›</span>
-                            </div>
-                          </div>
 
-                          {/* Loop Video Row */}
-                          <div
-                            className="yt-settings-row-interactive"
-                            onClick={handleToggleLoop}
-                            title="Loop video"
-                          >
-                            <div className="yt-row-left">
-                              <LoopIcon size={17} />
-                              <span className="yt-row-title">Loop video</span>
-                            </div>
-                            <div className="yt-row-right">
-                              <div className={`yt-mini-switch ${isLooping ? 'on' : 'off'}`}>
-                                <span className="yt-mini-thumb" />
+                            {/* Autoplay Row */}
+                            <div
+                              className="yt-menu-row yt-settings-row-interactive"
+                              onClick={handleToggleAutoplay}
+                              title="Autoplay next video"
+                            >
+                              <div className="yt-menu-row-left">
+                                <PlayIcon size={18} />
+                                <span>Autoplay</span>
+                              </div>
+                              <div className="yt-menu-row-right">
+                                <span className="yt-menu-val">{autoplay ? 'On' : 'Off'}</span>
                               </div>
                             </div>
                           </div>
-
-                          {/* Autoplay Row */}
-                          <div
-                            className="yt-settings-row-interactive"
-                            onClick={handleToggleAutoplay}
-                            title="Toggle autoplay"
-                          >
-                            <div className="yt-row-left">
-                              <PlayIcon size={16} />
-                              <span className="yt-row-title">Autoplay</span>
-                            </div>
-                            <div className="yt-row-right">
-                              <div className={`yt-mini-switch ${autoplay ? 'on' : 'off'}`}>
-                                <span className="yt-mini-thumb" />
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {/* Miniplayer / Theater Mode Button */}
+                {/* Screen Lock Button */}
                 <button
-                  className="yt-ctrl-btn yt-theater-btn"
+                  className="yt-ctrl-btn yt-lock-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsLocked(true);
+                    setShowControls(false);
+                    handleLockedTap();
+                  }}
+                  title="Lock screen"
+                >
+                  <LockIcon size={20} />
+                </button>
+
+                {/* Theater Mode Button */}
+                <button
+                  className="yt-ctrl-btn"
                   onClick={() => setIsTheater(!isTheater)}
-                  title={isTheater ? 'Default view' : 'Theater mode (t)'}
+                  title={isTheater ? 'Default view (t)' : 'Theater mode (t)'}
                 >
                   <TheaterIcon size={20} />
                 </button>
@@ -1442,16 +1326,20 @@ export default function VideoPlayer({
                 <button
                   className="yt-ctrl-btn"
                   onClick={toggleFullscreen}
-                  title="Full screen (f)"
+                  title={isFullscreen ? 'Exit full screen (f)' : 'Full screen (f)'}
                 >
-                  {isFullscreen ? <FullscreenExitIcon size={20} /> : <FullscreenIcon size={20} />}
+                  {isFullscreen ? (
+                    <FullscreenExitIcon size={20} />
+                  ) : (
+                    <FullscreenIcon size={20} />
+                  )}
                 </button>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Video Title (Cleanly below the player, NOT on top) */}
+        {/* Video Title */}
         <h1 className="watch-title">{video.title}</h1>
 
         {/* Channel and Actions Bar */}
@@ -1494,7 +1382,7 @@ export default function VideoPlayer({
 
           {/* Action buttons */}
           <div className="watch-actions">
-            {/* Static Likes with interactive toggle */}
+            {/* Likes */}
             <button
               className={`action-pill-btn ${isLiked ? 'active' : ''}`}
               onClick={() => onToggleLike && onToggleLike(video)}
@@ -1578,7 +1466,7 @@ export default function VideoPlayer({
           )}
         </div>
 
-        {/* Comments Section (Display real YouTube & user comments) */}
+        {/* Comments Section */}
         <CommentsSection
           videoId={video.videoId || video._id}
           currentUser={currentUser}
@@ -1661,9 +1549,17 @@ export default function VideoPlayer({
         {/* Related Videos List (Loads more on page scroll) */}
         <div className="related-videos-list">
           {allRelatedVideos.length === 0 ? (
-            <div className="related-loading-box">
-              <div className="spinner"></div>
-              <span>Finding related videos...</span>
+            <div className="related-skeletons-list">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <div key={`rel-skel-${i}`} className="related-skeleton-card">
+                  <div className="related-skeleton-thumb shimmer" />
+                  <div className="related-skeleton-info">
+                    <div className="related-skeleton-line title shimmer" />
+                    <div className="related-skeleton-line title-short shimmer" />
+                    <div className="related-skeleton-line channel shimmer" />
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             allRelatedVideos.map((item, index) => {
@@ -1676,50 +1572,72 @@ export default function VideoPlayer({
                 onSelectVideo(item);
               };
 
+              const relIsWatchLater = Boolean(watchLaterIds && watchLaterIds.includes(relId));
+
               return (
-                <Link
-                  key={`rel-${relId}-${index}`}
-                  to={`/watch?v=${encodeURIComponent(relId)}`}
-                  state={{ video: item }}
-                  className="related-card"
-                  onClick={handleRelClick}
-                >
-                  <div className="related-thumb-box">
-                    <img
-                      src={item.thumbnailUrl}
-                      alt={item.title}
-                      className="related-thumb-img"
-                      loading="lazy"
-                    />
-                    <span className="duration-badge">{item.duration}</span>
-                  </div>
-                  <div className="related-info">
-                    <h4 className="related-title" title={item.title}>
-                      {item.title}
-                    </h4>
-                    <p className="related-channel">{item.channelName}</p>
-                    <p className="related-meta">
-                      {item.views} • {item.uploadDate}
-                    </p>
-                  </div>
-                </Link>
+                <div key={`rel-${relId}-${index}`} className="related-card-wrapper">
+                  <Link
+                    to={`/watch?v=${encodeURIComponent(relId)}`}
+                    state={{ video: item }}
+                    className="related-card"
+                    onClick={handleRelClick}
+                  >
+                    <div className="related-thumb-box">
+                      <img
+                        src={item.thumbnailUrl}
+                        alt={item.title}
+                        className="related-thumb-img"
+                        loading="lazy"
+                      />
+                      <span className="duration-badge">{item.duration}</span>
+                    </div>
+                    <div className="related-info">
+                      <h4 className="related-title" title={item.title}>
+                        {item.title}
+                      </h4>
+                      <p className="related-channel">{item.channelName}</p>
+                      <p className="related-meta">
+                        {item.views} • {item.uploadDate}
+                      </p>
+                    </div>
+                  </Link>
+
+                  <VideoActionMenu
+                    video={item}
+                    isWatchLater={relIsWatchLater}
+                    onToggleWatchLater={onToggleWatchLater}
+                    onOpenSaveToPlaylist={onOpenSaveToPlaylist}
+                    onNotify={onNotify}
+                    className="related-menu-btn"
+                  />
+                </div>
               );
             })
           )}
 
-          {/* Infinite Scroll Sentinel for Related Videos */}
-          <div ref={relatedSentinelRef} className="related-scroll-sentinel">
-            {loadingMoreRelated && (
-              <div className="related-loading-more-box">
-                <div className="spinner"></div>
-                <span>Loading more videos...</span>
-              </div>
-            )}
-          </div>
+          {/* Infinite Scroll Sentinel for Related Videos: Only render after first batch exists */}
+          {allRelatedVideos.length > 0 && (
+            <div ref={relatedSentinelRef} className="related-scroll-sentinel">
+              {loadingMoreRelated && (
+                <div className="related-skeletons-list" style={{ marginTop: '8px' }}>
+                  {[1, 2].map((i) => (
+                    <div key={`rel-more-skel-${i}`} className="related-skeleton-card">
+                      <div className="related-skeleton-thumb shimmer" />
+                      <div className="related-skeleton-info">
+                        <div className="related-skeleton-line title shimmer" />
+                        <div className="related-skeleton-line title-short shimmer" />
+                        <div className="related-skeleton-line channel shimmer" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Screen sleep prevention loop (NoSleep HTML5 video technique - 100% works across all mobile browsers) */}
+      {/* Screen sleep prevention loop */}
       <video
         ref={keepAwakeVideoRef}
         playsInline
@@ -1730,26 +1648,6 @@ export default function VideoPlayer({
         width="1"
         height="1"
         src={NO_SLEEP_VIDEO_SRC}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '1px',
-          height: '1px',
-          opacity: 0.001,
-          pointerEvents: 'none',
-          zIndex: -1,
-        }}
-      />
-
-      {/* Audio carrier element to keep OS audio hardware session & lock screen media notification alive */}
-      <audio
-        ref={audioAnchorRef}
-        loop
-        playsInline
-        preload="auto"
-        aria-hidden="true"
-        src={SILENT_AUDIO_SRC}
         style={{
           position: 'fixed',
           top: 0,

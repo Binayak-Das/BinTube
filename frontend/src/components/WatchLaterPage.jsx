@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { PlayIcon, TrashIcon, ClockIcon } from './Icons.jsx';
+import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function WatchLaterPage({
   videos = [],
@@ -9,6 +10,10 @@ export default function WatchLaterPage({
   onRemoveVideo,
   onClearAll,
   onExplore,
+  watchLaterIds = [],
+  onToggleWatchLater,
+  onOpenSaveToPlaylist,
+  onNotify,
 }) {
   if (videos.length === 0) {
     return (
@@ -117,14 +122,20 @@ export default function WatchLaterPage({
                 </p>
               </div>
 
-              <button
-                type="button"
-                className="watch-later-remove-btn"
-                onClick={() => onRemoveVideo(vId)}
-                title="Remove from Watch Later"
-              >
-                <TrashIcon size={18} />
-              </button>
+              <VideoActionMenu
+                video={video}
+                isWatchLater={true}
+                onToggleWatchLater={() => onRemoveVideo(vId)}
+                onOpenSaveToPlaylist={onOpenSaveToPlaylist}
+                onNotify={onNotify}
+                extraAction={{
+                  label: 'Remove from Watch Later',
+                  icon: <TrashIcon size={18} />,
+                  onClick: () => onRemoveVideo(vId),
+                  danger: true,
+                }}
+                className="watch-later-action-menu"
+              />
             </div>
           );
         })}

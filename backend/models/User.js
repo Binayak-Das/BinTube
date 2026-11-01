@@ -40,6 +40,24 @@ export const playlistSchema = new mongoose.Schema(
   { _id: false }
 );
 
+export const historyItemSchema = new mongoose.Schema(
+  {
+    videoId: { type: String, required: true },
+    title: { type: String, required: true },
+    thumbnailUrl: { type: String, default: '' },
+    duration: { type: String, default: '0:00' },
+    channelName: { type: String, default: '' },
+    channelAvatar: { type: String, default: '' },
+    subscriberCount: { type: String, default: '100K' },
+    likes: { type: String, default: '10K' },
+    views: { type: String, default: '100K views' },
+    uploadDate: { type: String, default: '' },
+    description: { type: String, default: '' },
+    watchedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const userSchema = new mongoose.Schema(
   {
     username: {
@@ -65,6 +83,7 @@ const userSchema = new mongoose.Schema(
     likedVideos: [videoItemSchema],
     subscribedChannels: [subscribedChannelSchema],
     playlists: [playlistSchema],
+    history: [historyItemSchema],
   },
   { timestamps: true }
 );

@@ -10,11 +10,34 @@ import SearchResultsPage from './components/SearchResultsPage.jsx';
 import SubscriptionsPage from './components/SubscriptionsPage.jsx';
 import LikedVideosPage from './components/LikedVideosPage.jsx';
 import PlaylistsPage from './components/PlaylistsPage.jsx';
+import HistoryPage from './components/HistoryPage.jsx';
+import NotFoundPage from './components/NotFoundPage.jsx';
 import SaveToPlaylistModal from './components/SaveToPlaylistModal.jsx';
 import AuthModal from './components/AuthModal.jsx';
+import ShortsCard from './components/ShortsCard.jsx';
+import ShortsPage from './components/ShortsPage.jsx';
+import MobileBottomNav from './components/MobileBottomNav.jsx';
+import { ShortsIcon } from './components/Icons.jsx';
 import { apiUrl } from './config/api.js';
 
 const DEFAULT_SUBSCRIBED_CHANNELS = [];
+
+// Whitelist of valid known routes to restrict access to unknown/unavailable pages
+const VALID_ROUTES = new Set([
+  '/',
+  '/watch',
+  '/shorts',
+  '/results',
+  '/search',
+  '/subscriptions',
+  '/feed/subscriptions',
+  '/history',
+  '/feed/history',
+  '/liked',
+  '/watch-later',
+  '/playlists',
+  '/playlist',
+]);
 
 export default function App() {
   const location = useLocation();
@@ -24,8 +47,19 @@ export default function App() {
   // Determine active page and parameters from current URL
   const pathname = location.pathname.replace(/\/$/, '') || '/';
   let activePage = 'home';
-  if (pathname === '/subscriptions' || pathname === '/feed/subscriptions') {
+
+  // Restrict users from visiting any unknown unavailable page
+  if (pathname !== '/' && !VALID_ROUTES.has(pathname)) {
+    activePage = 'not-found';
+  } else if (pathname === '/shorts' || pathname.startsWith('/shorts/')) {
+    activePage = 'shorts';
+  } else if (pathname === '/subscriptions' || pathname === '/feed/subscriptions') {
     activePage = 'subscriptions';
+  } else if (
+    pathname === '/history' ||
+    pathname === '/feed/history'
+  ) {
+    activePage = 'history';
   } else if (
     pathname === '/liked' ||
     (pathname === '/playlist' && searchParams.get('list') === 'LL')
@@ -44,7 +78,11 @@ export default function App() {
   } else if (pathname === '/results' || pathname === '/search') {
     activePage = 'search';
   } else if (pathname === '/watch') {
-    activePage = 'watch';
+    if (!searchParams.get('v')) {
+      activePage = 'not-found';
+    } else {
+      activePage = 'watch';
+    }
   }
 
   // Active query parameters
@@ -100,6 +138,9 @@ export default function App() {
     }
   });
 
+  // Watch History State (Maintained strictly per-account: loaded from MongoDB on login)
+  const [historyVideos, setHistoryVideos] = useState([]);
+
   // Subscribed Channels State
   const [subscribedChannels, setSubscribedChannels] = useState(() => {
     try {
@@ -114,6 +155,11 @@ export default function App() {
   const [playlists, setPlaylists] = useState([]);
   const [saveToPlaylistTarget, setSaveToPlaylistTarget] = useState(null);
   const [playlistContext, setPlaylistContext] = useState(null);
+
+  // Shorts & Home Synchronous Loading State
+  const [homeShorts, setHomeShorts] = useState([]);
+  const [selectedShort, setSelectedShort] = useState(null);
+  const [isHomeReady, setIsHomeReady] = useState(false);
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -135,12 +181,13 @@ export default function App() {
     if (!token) return;
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [meRes, likedRes, subsRes, plRes, wlRes] = await Promise.allSettled([
+      const [meRes, likedRes, subsRes, plRes, wlRes, histRes] = await Promise.allSettled([
         fetch(apiUrl('/api/auth/me'), { headers }),
         fetch(apiUrl('/api/liked-videos'), { headers }),
         fetch(apiUrl('/api/subscriptions'), { headers }),
         fetch(apiUrl('/api/playlists'), { headers }),
         fetch(apiUrl('/api/watch-later'), { headers }),
+        fetch(apiUrl('/api/history'), { headers }),
       ]);
 
       if (meRes.status === 'fulfilled' && meRes.value.ok) {
@@ -165,6 +212,10 @@ export default function App() {
         setWatchLaterVideos(data.videos || []);
         setWatchLaterIds(data.watchLaterIds || (data.videos || []).map((v) => v.videoId));
       }
+      if (histRes.status === 'fulfilled' && histRes.value.ok) {
+        const data = await histRes.value.json();
+        setHistoryVideos(data.videos || []);
+      }
     } catch (err) {
       console.error('Error loading personalized user data:', err);
     }
@@ -180,10 +231,16 @@ export default function App() {
 
   // Update document title for SEO & YouTube experience
   useEffect(() => {
-    if (activePage === 'watch' && selectedVideo) {
+    if (activePage === 'not-found') {
+      document.title = '404 Not Found - YouTube';
+    } else if (activePage === 'shorts') {
+      document.title = 'Shorts - YouTube';
+    } else if (activePage === 'watch' && selectedVideo) {
       document.title = `${selectedVideo.title} - YouTube`;
     } else if (activePage === 'watch-later') {
       document.title = 'Watch Later - YouTube';
+    } else if (activePage === 'history') {
+      document.title = 'Watch history - YouTube';
     } else if (activePage === 'subscriptions') {
       document.title = 'Subscriptions - YouTube';
     } else if (activePage === 'liked') {
@@ -237,6 +294,7 @@ export default function App() {
         location.state.video._id === activeVideoId)
     ) {
       setSelectedVideo(location.state.video);
+      recordWatchHistory(location.state.video);
     }
 
     // Always fetch full video details (complete description, author details) & related videos
@@ -245,6 +303,7 @@ export default function App() {
       .then((data) => {
         if (data?.video) {
           setSelectedVideo(data.video);
+          recordWatchHistory(data.video);
         }
         if (data?.related) {
           setRelatedVideos(data.related);
@@ -262,6 +321,10 @@ export default function App() {
       isFetchingRef.current = true;
       setLoading(true);
 
+      if (isReset && activePage === 'home') {
+        setIsHomeReady(false);
+      }
+
       const thisFetchId = ++fetchIdRef.current;
 
       try {
@@ -274,13 +337,32 @@ export default function App() {
           _t: Date.now(),
         });
 
-        const res = await fetch(apiUrl(`/api/videos?${params.toString()}`));
-        const data = await res.json();
+        // Synchronous loading for Home page: fetch BOTH videos and shorts before displaying
+        const isHomeAllInitial = activePage === 'home' && isReset && category === 'All';
+
+        let res, data, shortsData = null;
+
+        if (isHomeAllInitial) {
+          const [videoRes, shortsRes] = await Promise.all([
+            fetch(apiUrl(`/api/videos?${params.toString()}`)),
+            fetch(apiUrl('/api/videos/shorts?limit=8')),
+          ]);
+          res = videoRes;
+          data = videoRes.ok ? await videoRes.json() : null;
+          shortsData = shortsRes.ok ? await shortsRes.json() : null;
+        } else {
+          res = await fetch(apiUrl(`/api/videos?${params.toString()}`));
+          data = await res.json();
+        }
 
         // Discard response if a newer request occurred in the meantime
         if (thisFetchId !== fetchIdRef.current) return;
 
-        if (res.ok && data.videos) {
+        if (shortsData?.videos && shortsData.videos.length > 0) {
+          setHomeShorts(shortsData.videos);
+        }
+
+        if (res.ok && data?.videos) {
           setVideos((prev) => {
             if (isReset) {
               const seen = new Set();
@@ -300,15 +382,28 @@ export default function App() {
             });
             return [...prev, ...newUnique];
           });
-          setHasMore(data.hasMore);
-          setPage(data.page);
+          // Unlimited infinite loading: always keep hasMore true
+          setHasMore(true);
+          setPage(data.page || pageToFetch);
         }
       } catch (err) {
         console.error('Fetch YouTube videos error:', err);
+        // If background tab switch interrupted the initial fetch, retry automatically instead of flashing "no videos found"
+        if (isReset && thisFetchId === fetchIdRef.current) {
+          setTimeout(() => {
+            if (thisFetchId === fetchIdRef.current) {
+              fetchVideos(pageToFetch, isReset);
+            }
+          }, 1200);
+          return;
+        }
       } finally {
         if (thisFetchId === fetchIdRef.current) {
           setLoading(false);
           isFetchingRef.current = false;
+          if (activePage === 'home' && isReset) {
+            setIsHomeReady(true);
+          }
         }
       }
     },
@@ -318,7 +413,12 @@ export default function App() {
   // Fetch videos whenever category, search query, or page mode changes
   useEffect(() => {
     setPage(1);
-    if (activePage === 'home' || activePage === 'search') {
+    if (activePage === 'home') {
+      setIsHomeReady(false);
+      setLoading(true);
+      fetchVideos(1, true);
+    } else if (activePage === 'search') {
+      setLoading(true);
       fetchVideos(1, true);
     }
   }, [category, searchQuery, activePage, fetchVideos]);
@@ -455,9 +555,15 @@ export default function App() {
   const handleNavigate = (pageName) => {
     setIsDrawerOpen(false);
     if (pageName === 'home') {
+      setIsHomeReady(false);
+      setLoading(true);
       navigate('/');
+    } else if (pageName === 'shorts') {
+      navigate('/shorts');
     } else if (pageName === 'subscriptions') {
       navigate('/subscriptions');
+    } else if (pageName === 'history') {
+      navigate('/history');
     } else if (pageName === 'liked') {
       navigate('/liked');
     } else if (pageName === 'watch-later') {
@@ -465,6 +571,7 @@ export default function App() {
     } else if (pageName === 'playlists') {
       navigate('/playlists');
     } else if (pageName === 'search') {
+      setLoading(true);
       navigate(`/results?search_query=${encodeURIComponent(searchQuery || '')}`);
     }
   };
@@ -477,6 +584,7 @@ export default function App() {
     setPage(1);
     setHasMore(true);
     setLoading(true);
+    setIsHomeReady(false);
 
     if (newCat === 'All') {
       navigate('/');
@@ -494,12 +602,95 @@ export default function App() {
     navigate(`/results?search_query=${encodeURIComponent(cleanQuery)}`);
   };
 
+  // Watch History Handlers (Maintained strictly account-wise for authenticated users)
+  const recordWatchHistory = useCallback(async (video) => {
+    if (!video) return;
+    const vId = video.videoId || video._id;
+    if (!vId) return;
+
+    // Strict per-account history: Only record if user is logged in
+    const token = localStorage.getItem('bintube_token');
+    if (!token || !user) return;
+
+    if (localStorage.getItem('yt_history_paused') === 'true') return;
+
+    const entry = {
+      videoId: vId,
+      title: video.title || 'Watched Video',
+      thumbnailUrl: video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`,
+      duration: video.duration || '0:00',
+      channelName: video.channelName || 'YouTube Creator',
+      channelAvatar: video.channelAvatar || '',
+      subscriberCount: video.subscriberCount || '100K subscribers',
+      likes: video.likes || '10K',
+      views: video.views || '100K views',
+      uploadDate: video.uploadDate || 'Recently',
+      description: video.description || '',
+      watchedAt: new Date().toISOString(),
+    };
+
+    setHistoryVideos((prev) => {
+      const filtered = prev.filter((item) => (item.videoId || item._id) !== vId);
+      return [entry, ...filtered].slice(0, 250);
+    });
+
+    try {
+      await fetch(apiUrl('/api/history'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ video: entry }),
+      });
+    } catch (err) {
+      console.error('Error saving history to server:', err);
+    }
+  }, [user]);
+
+  const handleRemoveHistory = async (videoId) => {
+    const token = localStorage.getItem('bintube_token');
+    if (!token || !user) return;
+
+    setHistoryVideos((prev) => prev.filter((item) => (item.videoId || item._id) !== videoId));
+
+    try {
+      await fetch(apiUrl(`/api/history/${videoId}`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      console.error('Error deleting history item from server:', err);
+    }
+    showToast('Video removed from history');
+  };
+
+  const handleClearHistory = async () => {
+    const token = localStorage.getItem('bintube_token');
+    if (!token || !user) return;
+
+    setHistoryVideos([]);
+
+    try {
+      await fetch(apiUrl('/api/history'), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      console.error('Error clearing history on server:', err);
+    }
+    showToast('Watch history cleared');
+  };
+
   const handleSelectVideo = (video, newPlaylistContext = null) => {
     const vId = video.videoId || video._id;
     if (!vId) return;
     setIsDrawerOpen(false);
     setSelectedVideo(video);
     setRelatedVideos([]);
+
+    // Record into user's watch history
+    recordWatchHistory(video);
 
     if (newPlaylistContext !== null) {
       setPlaylistContext(newPlaylistContext);
@@ -857,7 +1048,9 @@ export default function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('bintube_token');
+    localStorage.removeItem('yt_history_videos');
     setUser(null);
+    setHistoryVideos([]);
     setWatchLaterIds([]);
     setWatchLaterVideos([]);
     setLikedVideos([]);
@@ -897,6 +1090,7 @@ export default function App() {
             likedCount={likedVideos.length}
             subscriptionsCount={subscribedChannels.length}
             playlistsCount={playlists.length}
+            historyCount={user ? historyVideos.length : 0}
           />
         )}
 
@@ -913,11 +1107,12 @@ export default function App() {
           likedCount={likedVideos.length}
           subscriptionsCount={subscribedChannels.length}
           playlistsCount={playlists.length}
+          historyCount={user ? historyVideos.length : 0}
         />
 
         {/* Main Content Area */}
         <main className={`main-content ${activePage === 'watch' ? 'watch-mode' : ''}`}>
-          {/* HOME PAGE: Clean unified video feed without dividing section titles */}
+          {/* HOME PAGE: Display all videos only after loading everything (both shorts and videos) */}
           {activePage === 'home' && (
             <>
               {/* Category Bar */}
@@ -926,7 +1121,25 @@ export default function App() {
                 onSelectCategory={handleSelectCategory}
               />
 
-              {videos.length === 0 && !loading ? (
+              {!isHomeReady || loading ? (
+                /* Unified Loading State until BOTH videos and shorts are loaded */
+                <div className="home-unified-loading">
+                  <div className="videos-grid">
+                    {Array.from({ length: 9 }).map((_, idx) => (
+                      <div key={`home-skel-${idx}`} className="skeleton-card">
+                        <div className="skeleton-thumb-card shimmer" />
+                        <div className="skeleton-card-details">
+                          <div className="skeleton-avatar shimmer" />
+                          <div className="skeleton-card-lines">
+                            <div className="skeleton-line shimmer title-line" />
+                            <div className="skeleton-line shimmer channel-line" />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : videos.length === 0 ? (
                 <div className="empty-state">
                   <h3 className="empty-state-title">No videos found</h3>
                   <p className="empty-state-desc">
@@ -940,25 +1153,88 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div className="videos-grid">
-                  {videos.map((video, idx) => (
-                    <VideoCard
-                      key={`feed-${video.videoId || video._id}-${idx}`}
-                      video={video}
-                      onSelectVideo={handleSelectVideo}
-                      isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
-                      onToggleWatchLater={handleToggleWatchLater}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="videos-grid">
+                    {videos.slice(0, 6).map((video, idx) => (
+                      <VideoCard
+                        key={`feed-${video.videoId || video._id}-${idx}`}
+                        video={video}
+                        onSelectVideo={handleSelectVideo}
+                        isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
+                        onToggleWatchLater={handleToggleWatchLater}
+                        onOpenSaveToPlaylist={(vid) => {
+                          if (requireAuth('save videos to playlists')) {
+                            setSaveToPlaylistTarget(vid);
+                          }
+                        }}
+                        onNotify={showToast}
+                      />
+                    ))}
+                  </div>
+
+                  {/* YouTube Shorts Shelf on Home Tab (Revealed simultaneously with videos) */}
+                  {homeShorts.length > 0 && category === 'All' && (
+                    <div className="home-shorts-shelf">
+                      <div className="home-shorts-header">
+                        <div className="home-shorts-title-group">
+                          <ShortsIcon size={24} color="#ff0000" />
+                          <h2 className="home-shorts-heading">Shorts</h2>
+                        </div>
+                      </div>
+                      <div className="home-shorts-grid">
+                        {homeShorts.slice(0, 6).map((short) => (
+                          <ShortsCard
+                            key={`home-short-${short.videoId || short._id}`}
+                            video={short}
+                            onSelectVideo={(s) => {
+                              setSelectedShort(s);
+                              handleNavigate('shorts');
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Remaining Videos in Home Feed */}
+                  {videos.length > 6 && (
+                    <div className="videos-grid">
+                      {videos.slice(6).map((video, idx) => (
+                        <VideoCard
+                          key={`feed-${video.videoId || video._id}-${idx + 6}`}
+                          video={video}
+                          onSelectVideo={handleSelectVideo}
+                          isWatchLater={watchLaterIds.includes(video.videoId || video._id)}
+                          onToggleWatchLater={handleToggleWatchLater}
+                          onOpenSaveToPlaylist={(vid) => {
+                            if (requireAuth('save videos to playlists')) {
+                              setSaveToPlaylistTarget(vid);
+                            }
+                          }}
+                          onNotify={showToast}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
 
-              {/* Infinite Scroll Sentinel */}
+              {/* Infinite Scroll Sentinel: Render skeletons on load more instead of text spinners */}
               <div ref={sentinelRef} className="scroll-sentinel">
                 {loading && (
-                  <div className="loading-indicator">
-                    <div className="spinner"></div>
-                    <span>Loading more videos...</span>
+                  <div className="videos-grid" style={{ marginTop: '16px' }}>
+                    {Array.from({ length: 6 }).map((_, idx) => (
+                      <div key={`more-home-skel-${idx}`} className="skeleton-card">
+                        <div className="skeleton-thumb-card shimmer" />
+                        <div className="skeleton-card-details">
+                          <div className="skeleton-avatar shimmer" />
+                          <div className="skeleton-card-lines">
+                            <div className="skeleton-line shimmer title-line" />
+                            <div className="skeleton-line shimmer channel-line" />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {!hasMore && videos.length > 0 && (
@@ -1020,6 +1296,7 @@ export default function App() {
                 }}
                 currentUser={user}
                 onRequireAuth={requireAuth}
+                watchLaterIds={watchLaterIds}
               />
             ) : (
               <div
@@ -1042,6 +1319,28 @@ export default function App() {
             )
           )}
 
+          {/* DEDICATED HISTORY PAGE (Restricted to logged-in users) */}
+          {activePage === 'history' && (
+            <HistoryPage
+              videos={historyVideos}
+              currentUser={user}
+              onRequireAuth={() => setIsAuthModalOpen(true)}
+              onSelectVideo={handleSelectVideo}
+              onPlayPlaylist={handlePlayPlaylist}
+              onRemoveHistory={handleRemoveHistory}
+              onClearAll={handleClearHistory}
+              onExplore={() => handleNavigate('home')}
+              watchLaterIds={watchLaterIds}
+              onToggleWatchLater={handleToggleWatchLater}
+              onOpenSaveToPlaylist={(vid) => {
+                if (requireAuth('save videos to playlists')) {
+                  setSaveToPlaylistTarget(vid);
+                }
+              }}
+              onNotify={showToast}
+            />
+          )}
+
           {/* DEDICATED WATCH LATER PAGE */}
           {activePage === 'watch-later' && (
             <WatchLaterPage
@@ -1051,6 +1350,14 @@ export default function App() {
               onRemoveVideo={handleRemoveWatchLater}
               onClearAll={handleClearWatchLater}
               onExplore={() => handleNavigate('home')}
+              watchLaterIds={watchLaterIds}
+              onToggleWatchLater={handleToggleWatchLater}
+              onOpenSaveToPlaylist={(vid) => {
+                if (requireAuth('save videos to playlists')) {
+                  setSaveToPlaylistTarget(vid);
+                }
+              }}
+              onNotify={showToast}
             />
           )}
 
@@ -1063,6 +1370,12 @@ export default function App() {
               watchLaterIds={watchLaterIds}
               onToggleWatchLater={handleToggleWatchLater}
               onExplore={() => handleNavigate('home')}
+              onOpenSaveToPlaylist={(vid) => {
+                if (requireAuth('save videos to playlists')) {
+                  setSaveToPlaylistTarget(vid);
+                }
+              }}
+              onNotify={showToast}
             />
           )}
 
@@ -1077,6 +1390,12 @@ export default function App() {
               onExplore={() => handleNavigate('home')}
               watchLaterIds={watchLaterIds}
               onToggleWatchLater={handleToggleWatchLater}
+              onOpenSaveToPlaylist={(vid) => {
+                if (requireAuth('save videos to playlists')) {
+                  setSaveToPlaylistTarget(vid);
+                }
+              }}
+              onNotify={showToast}
             />
           )}
 
@@ -1092,10 +1411,46 @@ export default function App() {
               onExplore={() => handleNavigate('home')}
               watchLaterIds={watchLaterIds}
               onToggleWatchLater={handleToggleWatchLater}
+              onOpenSaveToPlaylist={(vid) => {
+                if (requireAuth('save videos to playlists')) {
+                  setSaveToPlaylistTarget(vid);
+                }
+              }}
+              onNotify={showToast}
+            />
+          )}
+
+          {/* DEDICATED SHORTS SECTION (Displays ONLY Shorts, NO Watch Later) */}
+          {activePage === 'shorts' && (
+            <ShortsPage
+              initialShort={selectedShort}
+              onNotify={showToast}
+              likedVideoIds={likedVideoIds}
+              onToggleLike={handleToggleLike}
+              subscribedChannels={subscribedChannels}
+              onToggleSubscribe={handleToggleSubscribe}
+              currentUser={user}
+              onRequireAuth={requireAuth}
+            />
+          )}
+
+          {/* 404 NOT FOUND / RESTRICTED UNAVAILABLE PAGE */}
+          {activePage === 'not-found' && (
+            <NotFoundPage
+              onNavigateHome={() => navigate('/')}
+              onSearch={handleSearch}
             />
           )}
         </main>
       </div>
+
+      {/* Mobile Bottom Navigation Bar (Image 2) */}
+      <MobileBottomNav
+        activePage={activePage}
+        onNavigate={handleNavigate}
+        currentUser={user}
+        onRequireAuth={() => setIsAuthModalOpen(true)}
+      />
 
       {/* Save to Playlist Modal */}
       <SaveToPlaylistModal

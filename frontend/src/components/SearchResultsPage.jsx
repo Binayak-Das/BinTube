@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ClockIcon, CheckIcon, MoreVerticalIcon, PlaylistIcon, ShareIcon } from './Icons.jsx';
+import { CheckIcon } from './Icons.jsx';
+import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function SearchResultsPage({
   searchQuery,
@@ -14,69 +15,30 @@ export default function SearchResultsPage({
   onNotify,
   sentinelRef,
 }) {
-  const [openMenuId, setOpenMenuId] = useState(null);
   const [activeFilter, setActiveFilter] = useState('All');
+  const [hasResolved, setHasResolved] = useState(false);
 
-  useEffect(() => {
-    const handleGlobalClick = () => setOpenMenuId(null);
-    window.addEventListener('click', handleGlobalClick);
-    return () => window.removeEventListener('click', handleGlobalClick);
-  }, []);
+  React.useEffect(() => {
+    setHasResolved(false);
+  }, [searchQuery]);
 
-  const handleShare = async (video) => {
-    if (!video) return;
-    const vId = video.videoId || video._id;
-    if (!vId) return;
-    const origin = window.location.origin || 'http://localhost:5173';
-    const shareUrl = `${origin}/watch?v=${encodeURIComponent(vId)}`;
-    const shareTitle = video.title || 'Check out this video';
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: shareTitle,
-          text: shareTitle,
-          url: shareUrl,
-        });
-        return;
-      } catch (err) {
-        if (err && (err.name === 'AbortError' || err.code === 20)) {
-          return;
-        }
-      }
+  React.useEffect(() => {
+    if (!loading && videos.length > 0) {
+      setHasResolved(true);
+    } else if (!loading && videos.length === 0) {
+      // Buffer before deciding genuinely empty to handle background tab switch delays
+      const t = setTimeout(() => {
+        setHasResolved(true);
+      }, 1000);
+      return () => clearTimeout(t);
     }
+  }, [loading, videos.length]);
 
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      try {
-        await navigator.clipboard.writeText(shareUrl);
-        if (typeof onNotify === 'function') {
-          onNotify('Link copied to clipboard');
-        }
-        return;
-      } catch (_) {}
-    }
+  const showSkeletons = loading || !hasResolved || (videos.length === 0 && Boolean(searchQuery));
 
-    try {
-      const el = document.createElement('textarea');
-      el.value = shareUrl;
-      el.style.position = 'fixed';
-      el.style.opacity = '0';
-      document.body.appendChild(el);
-      el.select();
-      document.execCommand('copy');
-      document.body.removeChild(el);
-      if (typeof onNotify === 'function') {
-        onNotify('Link copied to clipboard');
-      }
-    } catch (_) {
-      if (typeof onNotify === 'function') {
-        onNotify(`Link: ${shareUrl}`);
-      }
-    }
-  };
   return (
     <div className="search-results-page">
-      {videos.length === 0 && loading ? (
+      {videos.length === 0 && showSkeletons ? (
         <div className="search-skeleton-list">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <div key={i} className="search-video-skeleton">
@@ -97,7 +59,7 @@ export default function SearchResultsPage({
             </div>
           ))}
         </div>
-      ) : videos.length === 0 && !loading ? (
+      ) : videos.length === 0 && !loading && hasResolved ? (
         <div className="empty-state">
           <h3 className="empty-state-title">No search results found</h3>
           <p className="empty-state-desc">
@@ -120,6 +82,13 @@ export default function SearchResultsPage({
               }
             };
 
+            const isAiVideo =
+              video.isAi ||
+              video.hasAiMark ||
+              /\b(ai|artificial intelligence|generative ai|sora|chatgpt|midjourney|deepfake)\b/i.test(
+                `${video.title || ''} ${video.description || ''}`
+              );
+
             return (
               <Link
                 key={`search-${vId}-${index}`}
@@ -137,6 +106,7 @@ export default function SearchResultsPage({
                     loading="lazy"
                   />
                   <span className="duration-badge">{video.duration}</span>
+                  {isAiVideo && <span className="thumb-ai-badge">AI</span>}
 
                   <div
                     className="card-quick-actions"
@@ -179,74 +149,13 @@ export default function SearchResultsPage({
                       <h3 className="search-row-title" title={video.title}>
                         {video.title}
                       </h3>
-                      <div className="search-more-menu-container">
-                        <button
-                          type="button"
-                          className={`search-row-more-btn ${openMenuId === vId ? 'menu-active' : ''}`}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setOpenMenuId(openMenuId === vId ? null : vId);
-                          }}
-                          title="More options"
-                        >
-                          <MoreVerticalIcon size={18} />
-                        </button>
-
-                        {openMenuId === vId && (
-                          <div
-                            className="search-more-dropdown"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                            }}
-                          >
-                            <button
-                              type="button"
-                              className="search-dropdown-item"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setOpenMenuId(null);
-                                onToggleWatchLater(video);
-                              }}
-                            >
-                              <ClockIcon size={18} />
-                              <span>{isWatchLater ? 'Remove from Watch Later' : 'Save to Watch Later'}</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              className="search-dropdown-item"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setOpenMenuId(null);
-                                if (onOpenSaveToPlaylist) {
-                                  onOpenSaveToPlaylist(video);
-                                }
-                              }}
-                            >
-                              <PlaylistIcon size={18} />
-                              <span>Save to playlist</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              className="search-dropdown-item"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setOpenMenuId(null);
-                                handleShare(video);
-                              }}
-                            >
-                              <ShareIcon size={18} />
-                              <span>Share</span>
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      <VideoActionMenu
+                        video={video}
+                        isWatchLater={isWatchLater}
+                        onToggleWatchLater={onToggleWatchLater}
+                        onOpenSaveToPlaylist={onOpenSaveToPlaylist}
+                        onNotify={onNotify}
+                      />
                     </div>
 
                     {/* Desktop Meta (views • date) */}
@@ -286,6 +195,7 @@ export default function SearchResultsPage({
                     )}
 
                     <div className="search-row-badges">
+                      {isAiVideo && <span className="search-video-badge ai-badge">AI</span>}
                       <span className="search-video-badge">4K</span>
                     </div>
                   </div>
@@ -296,12 +206,21 @@ export default function SearchResultsPage({
         </div>
       )}
 
-      {/* Infinite Scroll Sentinel */}
+      {/* Infinite Scroll Sentinel: Render skeletons on load more instead of text spinners */}
       <div ref={sentinelRef} className="scroll-sentinel">
         {loading && (
-          <div className="loading-indicator">
-            <div className="spinner"></div>
-            <span>Loading more search results...</span>
+          <div className="search-skeleton-list" style={{ marginTop: '16px' }}>
+            {[1, 2, 3].map((i) => (
+              <div key={`more-search-skel-${i}`} className="search-video-skeleton">
+                <div className="skeleton-thumb shimmer" />
+                <div className="skeleton-details">
+                  <div className="skeleton-details-text">
+                    <div className="skeleton-line title-line shimmer" />
+                    <div className="skeleton-line meta-line shimmer" />
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
         {!hasMore && videos.length > 0 && (

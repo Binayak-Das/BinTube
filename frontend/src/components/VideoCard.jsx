@@ -1,14 +1,23 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ClockIcon, CheckIcon } from './Icons.jsx';
+import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function VideoCard({
   video,
   onSelectVideo,
   isWatchLater,
   onToggleWatchLater,
+  onOpenSaveToPlaylist,
+  onNotify,
 }) {
   const vId = video.videoId || video._id;
+  const isAiVideo =
+    video.isAi ||
+    video.hasAiMark ||
+    /\b(ai|artificial intelligence|generative ai|sora|chatgpt|midjourney|deepfake)\b/i.test(
+      `${video.title || ''} ${video.description || ''}`
+    );
 
   const handleClick = (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
@@ -36,6 +45,7 @@ export default function VideoCard({
           loading="lazy"
         />
         <span className="duration-badge">{video.duration}</span>
+        {isAiVideo && <span className="thumb-ai-badge">AI</span>}
 
         {/* Hover quick action overlays */}
         <div
@@ -80,6 +90,15 @@ export default function VideoCard({
             <span>{video.views}</span> • <span>{video.uploadDate}</span>
           </div>
         </div>
+
+        <VideoActionMenu
+          video={video}
+          isWatchLater={isWatchLater}
+          onToggleWatchLater={onToggleWatchLater}
+          onOpenSaveToPlaylist={onOpenSaveToPlaylist}
+          onNotify={onNotify}
+          className="card-more-menu"
+        />
       </div>
     </Link>
   );

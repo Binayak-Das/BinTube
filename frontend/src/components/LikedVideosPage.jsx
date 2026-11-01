@@ -7,6 +7,7 @@ import {
   ClockIcon,
   CheckIcon,
 } from './Icons.jsx';
+import VideoActionMenu from './VideoActionMenu.jsx';
 
 export default function LikedVideosPage({
   videos = [],
@@ -17,6 +18,8 @@ export default function LikedVideosPage({
   onExplore,
   watchLaterIds = [],
   onToggleWatchLater,
+  onOpenSaveToPlaylist,
+  onNotify,
 }) {
   const hasVideos = videos && videos.length > 0;
   const leadVideo = hasVideos ? videos[0] : null;
@@ -151,29 +154,19 @@ export default function LikedVideosPage({
 
                     {/* Actions */}
                     <div className="liked-row-actions">
-                      {/* Unlike / Remove */}
-                      <button
-                        type="button"
-                        className="liked-row-btn active-like"
-                        onClick={() => onRemoveLike(vId)}
-                        title="Remove from Liked videos"
-                      >
-                        <ThumbsUpIcon size={16} filled={true} />
-                      </button>
-
-                      {/* Watch Later */}
-                      <button
-                        type="button"
-                        className={`liked-row-btn ${isSavedToWatchLater ? 'active-wl' : ''}`}
-                        onClick={() => onToggleWatchLater(video)}
-                        title={
-                          isSavedToWatchLater
-                            ? 'Remove from Watch Later'
-                            : 'Save to Watch Later'
-                        }
-                      >
-                        <ClockIcon size={16} />
-                      </button>
+                      <VideoActionMenu
+                        video={video}
+                        isWatchLater={isSavedToWatchLater}
+                        onToggleWatchLater={onToggleWatchLater}
+                        onOpenSaveToPlaylist={onOpenSaveToPlaylist}
+                        onNotify={onNotify}
+                        extraAction={{
+                          label: 'Remove from Liked videos',
+                          icon: <ThumbsUpIcon size={18} filled={true} />,
+                          onClick: () => onRemoveLike(vId),
+                          danger: true,
+                        }}
+                      />
                     </div>
                   </div>
                 );

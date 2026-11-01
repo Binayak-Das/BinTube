@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import {
   HomeIcon,
+  ShortsIcon,
   ClockIcon,
   FlameIcon,
   PlayIcon,
@@ -10,6 +11,7 @@ import {
   SubscriptionsIcon,
   ThumbsUpIcon,
   PlaylistIcon,
+  HistoryIcon,
 } from './Icons.jsx';
 
 export default function Sidebar({
@@ -24,6 +26,7 @@ export default function Sidebar({
   likedCount = 0,
   subscriptionsCount = 0,
   playlistsCount = 0,
+  historyCount = 0,
 }) {
   const categories = [
     { name: 'Music', label: 'Music' },
@@ -55,9 +58,8 @@ export default function Sidebar({
       )}
 
       <aside
-        className={`yt-sidebar ${isOpen ? 'open' : 'closed'} ${
-          isOverlay ? 'overlay-drawer' : ''
-        }`}
+        className={`yt-sidebar ${isOpen ? 'open' : 'closed'} ${isOverlay ? 'overlay-drawer' : ''
+          }`}
         style={
           isOverlay && !isOpen
             ? { visibility: 'hidden', boxShadow: 'none', pointerEvents: 'none' }
@@ -88,9 +90,8 @@ export default function Sidebar({
         <div className="sidebar-section">
           <Link
             to="/"
-            className={`sidebar-item ${
-              activePage === 'home' && activeCategory === 'All' ? 'active' : ''
-            }`}
+            className={`sidebar-item ${activePage === 'home' && activeCategory === 'All' ? 'active' : ''
+              }`}
             onClick={(e) =>
               handleLinkClick(e, () => {
                 onSelectCategory('All');
@@ -103,10 +104,23 @@ export default function Sidebar({
           </Link>
 
           <Link
+            to="/shorts"
+            className={`sidebar-item ${activePage === 'shorts' ? 'active' : ''
+              }`}
+            onClick={(e) =>
+              handleLinkClick(e, () => {
+                onNavigate('shorts');
+              })
+            }
+          >
+            <ShortsIcon size={20} color={activePage === 'shorts' ? '#ff0000' : 'currentColor'} />
+            <span>Shorts</span>
+          </Link>
+
+          <Link
             to="/?category=Trending"
-            className={`sidebar-item ${
-              activePage === 'home' && activeCategory === 'Trending' ? 'active' : ''
-            }`}
+            className={`sidebar-item ${activePage === 'home' && activeCategory === 'Trending' ? 'active' : ''
+              }`}
             onClick={(e) =>
               handleLinkClick(e, () => {
                 onSelectCategory('Trending');
@@ -118,11 +132,17 @@ export default function Sidebar({
             <span>Trending</span>
           </Link>
 
+        </div>
+
+        <div className="sidebar-divider" />
+
+        {/* You Section */}
+        <div className="sidebar-section">
+          <h4 className="sidebar-heading">You</h4>
           <Link
             to="/subscriptions"
-            className={`sidebar-item ${
-              activePage === 'subscriptions' ? 'active' : ''
-            }`}
+            className={`sidebar-item ${activePage === 'subscriptions' ? 'active' : ''
+              }`}
             onClick={(e) =>
               handleLinkClick(e, () => {
                 onNavigate('subscriptions');
@@ -132,18 +152,25 @@ export default function Sidebar({
             <SubscriptionsIcon size={20} />
             <span>Subscriptions</span>
           </Link>
-        </div>
 
-        <div className="sidebar-divider" />
+          <Link
+            to="/history"
+            className={`sidebar-item ${activePage === 'history' ? 'active' : ''
+              }`}
+            onClick={(e) =>
+              handleLinkClick(e, () => {
+                onNavigate('history');
+              })
+            }
+          >
+            <HistoryIcon size={20} />
+            <span>History</span>
+          </Link>
 
-        {/* You Section */}
-        <div className="sidebar-section">
-          <h4 className="sidebar-heading">You</h4>
           <Link
             to="/liked"
-            className={`sidebar-item ${
-              activePage === 'liked' ? 'active' : ''
-            }`}
+            className={`sidebar-item ${activePage === 'liked' ? 'active' : ''
+              }`}
             onClick={(e) =>
               handleLinkClick(e, () => {
                 onNavigate('liked');
@@ -156,9 +183,8 @@ export default function Sidebar({
 
           <Link
             to="/watch-later"
-            className={`sidebar-item ${
-              activePage === 'watch-later' ? 'active' : ''
-            }`}
+            className={`sidebar-item ${activePage === 'watch-later' ? 'active' : ''
+              }`}
             onClick={(e) =>
               handleLinkClick(e, () => {
                 onNavigate('watch-later');
@@ -171,9 +197,8 @@ export default function Sidebar({
 
           <Link
             to="/playlists"
-            className={`sidebar-item ${
-              activePage === 'playlists' ? 'active' : ''
-            }`}
+            className={`sidebar-item ${activePage === 'playlists' ? 'active' : ''
+              }`}
             onClick={(e) =>
               handleLinkClick(e, () => {
                 onNavigate('playlists');
@@ -193,9 +218,8 @@ export default function Sidebar({
             <Link
               key={cat.name}
               to={`/?category=${encodeURIComponent(cat.name)}`}
-              className={`sidebar-item ${
-                activePage === 'home' && activeCategory === cat.name ? 'active' : ''
-              }`}
+              className={`sidebar-item ${activePage === 'home' && activeCategory === cat.name ? 'active' : ''
+                }`}
               onClick={(e) =>
                 handleLinkClick(e, () => {
                   onSelectCategory(cat.name);
