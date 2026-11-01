@@ -2799,6 +2799,35 @@ textarea {
   transform: scale(0.94);
 }
 
+/* Shorts Clean Zero-Overlay Iframe Embed Scaler */
+.shorts-iframe-scaler {
+  position: absolute;
+  top: -65px;
+  left: 0;
+  width: 100%;
+  height: calc(100% + 130px);
+  overflow: hidden;
+  pointer-events: none !important;
+  z-index: 1;
+}
+
+.shorts-clean-embed {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border: none !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 768px) {
+  .shorts-iframe-scaler {
+    top: -55px;
+    height: calc(100% + 110px);
+  }
+}
+
 /* Floating Unmute Icon Button (Top-Right as an icon) */
 .yt-unmute-icon-btn {
   position: absolute;
@@ -4968,15 +4997,15 @@ textarea {
     aspect-ratio: 16 / 9;
   }
 
-  /* Reset mobile iframe scaler to exact 100% viewport so AI mark & disclaimers are never cropped or distorted */
+  /* Mobile iframe scaler cropped to hide YouTube title bar and watermark with zero distortion */
   .yt-iframe-scaler,
   .yt-iframe-fill,
   .yt-custom-player-wrapper.has-active-cc .yt-iframe-scaler,
   .yt-custom-player-wrapper.has-active-cc .yt-iframe-fill {
-    top: 0 !important;
+    top: -55px !important;
     left: 0 !important;
     width: 100% !important;
-    height: 100% !important;
+    height: calc(100% + 110px) !important;
     transform: none !important;
   }
 

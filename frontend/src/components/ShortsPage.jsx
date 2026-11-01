@@ -8,7 +8,7 @@ import {
   VolumeMuteIcon,
 } from './Icons.jsx';
 import CommentsSection from './CommentsSection.jsx';
-import { apiUrl } from '../config/api.js';
+import { apiUrl, isVercelDeployment } from '../config/api.js';
 
 export default function ShortsPage({
   initialShort = null,
@@ -27,12 +27,26 @@ export default function ShortsPage({
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [useShortsEmbed, setUseShortsEmbed] = useState(() => isVercelDeployment);
 
   const viewportRef = useRef(null);
   const reelRefs = useRef([]);
   const videoRefs = useRef({});
   const audioRefs = useRef({});
+  const iframeRefs = useRef({});
   const isFetchingRef = useRef(false);
+
+  const sendShortIframeCommand = useCallback((idx, func, args = []) => {
+    try {
+      const iframe = iframeRefs.current[idx];
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func, args }),
+          '*'
+        );
+      }
+    } catch (_) {}
+  }, []);
 
   // Fetch Shorts from API with unlimited infinite page support and zero repetitive reels
   const fetchShorts = useCallback(async (pageNum = 1) => {
@@ -147,9 +161,40 @@ export default function ShortsPage({
     });
   }, [activeIdx, isPlaying, isMuted, shorts]);
 
+  // Synchronize active reel iframe playback in embed mode
+  useEffect(() => {
+    if (!useShortsEmbed) return;
+    Object.keys(iframeRefs.current).forEach((idxStr) => {
+      const idx = parseInt(idxStr, 10);
+      if (idx === activeIdx) {
+        if (isPlaying) {
+          sendShortIframeCommand(idx, 'playVideo');
+          if (isMuted) {
+            sendShortIframeCommand(idx, 'mute');
+          } else {
+            sendShortIframeCommand(idx, 'unMute');
+            sendShortIframeCommand(idx, 'setVolume', [100]);
+          }
+        } else {
+          sendShortIframeCommand(idx, 'pauseVideo');
+        }
+      } else {
+        sendShortIframeCommand(idx, 'pauseVideo');
+        sendShortIframeCommand(idx, 'seekTo', [0, true]);
+      }
+    });
+  }, [useShortsEmbed, activeIdx, isPlaying, isMuted, sendShortIframeCommand]);
+
   // Document gesture listener to ensure unmuted audio plays on first user tap/key/touch
   useEffect(() => {
     const unlockShortAudioOnGesture = () => {
+      if (useShortsEmbed) {
+        if (isPlaying && !isMuted) {
+          sendShortIframeCommand(activeIdx, 'unMute');
+          sendShortIframeCommand(activeIdx, 'setVolume', [100]);
+        }
+        return;
+      }
       const audEl = audioRefs.current[activeIdx];
       if (audEl && isPlaying && !isMuted && audEl.paused) {
         audEl.muted = false;
@@ -172,7 +217,7 @@ export default function ShortsPage({
       window.removeEventListener('click', unlockShortAudioOnGesture);
       window.removeEventListener('keydown', unlockShortAudioOnGesture);
     };
-  }, [activeIdx, isPlaying, isMuted, shorts]);
+  }, [useShortsEmbed, activeIdx, isPlaying, isMuted, shorts, sendShortIframeCommand]);
 
   // Seamless Background Play Engine for Shorts:
   // When switching tabs or minimizing, audio continues and video resyncs on foreground return
@@ -231,15 +276,28 @@ export default function ShortsPage({
         scrollToReel(activeIdx - 1);
       } else if (e.code === 'Space') {
         e.preventDefault();
-        setIsPlaying((p) => !p);
+        setIsPlaying((p) => {
+          const nextPlay = !p;
+          if (useShortsEmbed) {
+            sendShortIframeCommand(activeIdx, nextPlay ? 'playVideo' : 'pauseVideo');
+          }
+          return nextPlay;
+        });
       } else if (e.code === 'KeyM') {
         e.preventDefault();
-        setIsMuted((m) => !m);
+        setIsMuted((m) => {
+          const nextMute = !m;
+          if (useShortsEmbed) {
+            sendShortIframeCommand(activeIdx, nextMute ? 'mute' : 'unMute');
+            if (!nextMute) sendShortIframeCommand(activeIdx, 'setVolume', [100]);
+          }
+          return nextMute;
+        });
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeIdx, scrollToReel]);
+  }, [activeIdx, scrollToReel, useShortsEmbed, sendShortIframeCommand]);
 
   // Native share handler
   const handleShare = async (shortItem) => {
@@ -319,7 +377,16 @@ export default function ShortsPage({
                   className="shorts-sound-btn"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setIsMuted((prev) => !prev);
+                    const nextMute = !isMuted;
+                    setIsMuted(nextMute);
+                    if (useShortsEmbed) {
+                      if (nextMute) {
+                        sendShortIframeCommand(activeIdx, 'mute');
+                      } else {
+                        sendShortIframeCommand(activeIdx, 'unMute');
+                        sendShortIframeCommand(activeIdx, 'setVolume', [100]);
+                      }
+                    }
                   }}
                   title={isMuted ? 'Unmute audio' : 'Mute audio'}
                 >
@@ -331,86 +398,96 @@ export default function ShortsPage({
                   className="shorts-video-viewport"
                   onClick={() => {
                     if (isActive) {
-                      setIsPlaying((p) => !p);
+                      setIsPlaying((p) => {
+                        const nextPlay = !p;
+                        if (useShortsEmbed) {
+                          sendShortIframeCommand(activeIdx, nextPlay ? 'playVideo' : 'pauseVideo');
+                        }
+                        return nextPlay;
+                      });
                     } else {
                       scrollToReel(idx);
                     }
                   }}
                 >
                   {isNearActive ? (
-                    <>
-                      <video
-                        ref={(el) => (videoRefs.current[idx] = el)}
-                        className="shorts-html5-video"
-                        src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/stream`)}
-                        poster={short.thumbnailUrl || `https://i.ytimg.com/vi/${sId}/hqdefault.jpg`}
-                        autoPlay={isActive}
-                        loop={true}
-                        playsInline
-                        preload="auto"
-                        muted={true}
-                        onCanPlay={(e) => {
-                          if (isActive && isPlaying && e.target.paused) {
-                            e.target.play().catch(() => {});
-                          }
-                        }}
-                        onTimeUpdate={(e) => {
-                          const aud = audioRefs.current[idx];
-                          if (aud && Math.abs(e.target.currentTime - aud.currentTime) > 0.25) {
-                            aud.currentTime = e.target.currentTime;
-                          }
-                        }}
-                        onSeeked={(e) => {
-                          const aud = audioRefs.current[idx];
-                          if (aud) aud.currentTime = e.target.currentTime;
-                        }}
-                        onEnded={() => {
-                          // Play continuously in loop - strictly NO autoscrolling
-                          const vid = videoRefs.current[idx];
-                          const aud = audioRefs.current[idx];
-                          if (vid) {
-                            vid.currentTime = 0;
-                            vid.play().catch(() => {});
-                          }
-                          if (aud) {
-                            aud.currentTime = 0;
-                            aud.play().catch(() => {});
-                          }
-                        }}
-                        onError={(e) => {
-                          const target = e.target;
-                          setTimeout(() => {
-                            if (target) {
-                              target.load();
-                              if (isActive && isPlaying) {
-                                target.play().catch(() => {});
-                              }
+                    useShortsEmbed ? (
+                      <div className="shorts-iframe-scaler">
+                        <iframe
+                          ref={(el) => (iframeRefs.current[idx] = el)}
+                          className="shorts-clean-embed"
+                          src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(sId)}?autoplay=${isActive ? 1 : 0}&mute=${isMuted ? 1 : 0}&loop=1&playlist=${encodeURIComponent(sId)}&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&disablekb=1&fs=0&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(typeof window !== 'undefined' ? window.location.origin : '')}`}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          title={short.title || 'Short Reel'}
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <video
+                          ref={(el) => (videoRefs.current[idx] = el)}
+                          className="shorts-html5-video"
+                          src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/stream`)}
+                          poster={short.thumbnailUrl || `https://i.ytimg.com/vi/${sId}/hqdefault.jpg`}
+                          autoPlay={isActive}
+                          loop={true}
+                          playsInline
+                          preload="auto"
+                          muted={true}
+                          onCanPlay={(e) => {
+                            if (isActive && isPlaying && e.target.paused) {
+                              e.target.play().catch(() => {});
                             }
-                          }, 1000);
-                        }}
-                      />
-                      <audio
-                        ref={(el) => (audioRefs.current[idx] = el)}
-                        src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/audio`)}
-                        loop={true}
-                        preload="auto"
-                        muted={isMuted}
-                        onCanPlay={(e) => {
-                          if (isActive && isPlaying && !isMuted && e.target.paused) {
-                            e.target.currentTime = videoRefs.current[idx]?.currentTime || 0;
-                            e.target.play().catch(() => {});
-                          }
-                        }}
-                        onEnded={() => {
-                          // Audio loop synchronization
-                          const aud = audioRefs.current[idx];
-                          if (aud) {
-                            aud.currentTime = 0;
-                            aud.play().catch(() => {});
-                          }
-                        }}
-                      />
-                    </>
+                          }}
+                          onTimeUpdate={(e) => {
+                            const aud = audioRefs.current[idx];
+                            if (aud && Math.abs(e.target.currentTime - aud.currentTime) > 0.25) {
+                              aud.currentTime = e.target.currentTime;
+                            }
+                          }}
+                          onSeeked={(e) => {
+                            const aud = audioRefs.current[idx];
+                            if (aud) aud.currentTime = e.target.currentTime;
+                          }}
+                          onEnded={() => {
+                            // Play continuously in loop - strictly NO autoscrolling
+                            const vid = videoRefs.current[idx];
+                            const aud = audioRefs.current[idx];
+                            if (vid) {
+                              vid.currentTime = 0;
+                              vid.play().catch(() => {});
+                            }
+                            if (aud) {
+                              aud.currentTime = 0;
+                              aud.play().catch(() => {});
+                            }
+                          }}
+                          onError={() => {
+                            setUseShortsEmbed(true);
+                          }}
+                        />
+                        <audio
+                          ref={(el) => (audioRefs.current[idx] = el)}
+                          src={apiUrl(`/api/videos/${encodeURIComponent(sId)}/audio`)}
+                          loop={true}
+                          preload="auto"
+                          muted={isMuted}
+                          onCanPlay={(e) => {
+                            if (isActive && isPlaying && !isMuted && e.target.paused) {
+                              e.target.currentTime = videoRefs.current[idx]?.currentTime || 0;
+                              e.target.play().catch(() => {});
+                            }
+                          }}
+                          onEnded={() => {
+                            // Audio loop synchronization
+                            const aud = audioRefs.current[idx];
+                            if (aud) {
+                              aud.currentTime = 0;
+                              aud.play().catch(() => {});
+                            }
+                          }}
+                        />
+                      </>
+                    )
                   ) : (
                     <img
                       src={short.thumbnailUrl || `https://i.ytimg.com/vi/${sId}/hqdefault.jpg`}

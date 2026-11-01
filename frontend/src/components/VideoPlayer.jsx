@@ -25,7 +25,7 @@ import {
 } from './Icons.jsx';
 import CommentsSection from './CommentsSection.jsx';
 import VideoActionMenu from './VideoActionMenu.jsx';
-import { apiUrl } from '../config/api.js';
+import { apiUrl, isVercelDeployment } from '../config/api.js';
 
 // Base64 1x1 invisible MP4 loop for bulletproof mobile screen wake lock (NoSleep standard)
 const NO_SLEEP_VIDEO_SRC =
@@ -73,9 +73,23 @@ export default function VideoPlayer({
   const wakeLockRef = useRef(null);
   const shouldBePlayingRef = useRef(true);
   const settingsMenuRef = useRef(null);
+  const iframeRef = useRef(null);
+
+  const [useEmbedFallback, setUseEmbedFallback] = useState(() => isVercelDeployment);
+
+  const sendIframeCommand = useCallback((func, args = []) => {
+    try {
+      if (iframeRef.current && iframeRef.current.contentWindow) {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'command', func, args }),
+          '*'
+        );
+      }
+    } catch (_) {}
+  }, []);
 
   const [isPlaying, setIsPlaying] = useState(true);
-  const [isBuffering, setIsBuffering] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(() => !isVercelDeployment);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(100);
@@ -336,6 +350,15 @@ export default function VideoPlayer({
 
   // Toggle Play / Pause (Keeps visual video and audio track strictly synchronized)
   const togglePlayPause = useCallback((forcePlay = null) => {
+    if (useEmbedFallback) {
+      const nextPlay = forcePlay !== null ? forcePlay : !isPlaying;
+      shouldBePlayingRef.current = nextPlay;
+      setIsPlaying(nextPlay);
+      sendIframeCommand(nextPlay ? 'playVideo' : 'pauseVideo');
+      triggerFlash(nextPlay ? 'play' : 'pause');
+      return;
+    }
+
     const vid = videoRef.current;
     const aud = bgAudioRef.current;
     if (!vid) return;
@@ -364,10 +387,22 @@ export default function VideoPlayer({
       releaseWakeLock();
       triggerFlash('pause');
     }
-  }, [requestWakeLock, releaseWakeLock, triggerFlash, isMuted, volume, playbackSpeed]);
+  }, [useEmbedFallback, isPlaying, sendIframeCommand, requestWakeLock, releaseWakeLock, triggerFlash, isMuted, volume, playbackSpeed]);
 
   // Seek relative (forward / backward seconds)
   const seekRelative = useCallback((seconds) => {
+    if (useEmbedFallback) {
+      const target = Math.max(0, Math.min(duration || 999999, currentTime + seconds));
+      setCurrentTime(target);
+      sendIframeCommand('seekTo', [target, true]);
+      if (seconds < 0) {
+        triggerRipple('left');
+      } else {
+        triggerRipple('right');
+      }
+      return;
+    }
+
     const vid = videoRef.current;
     const aud = bgAudioRef.current;
     if (!vid) return;
@@ -386,7 +421,7 @@ export default function VideoPlayer({
     } else {
       triggerRipple('right');
     }
-  }, [duration, triggerRipple]);
+  }, [useEmbedFallback, duration, currentTime, sendIframeCommand, triggerRipple]);
 
   // Native HTML5 <video> Event Handlers
   const handleVideoPlay = () => {
@@ -452,42 +487,83 @@ export default function VideoPlayer({
     }
   };
 
-  const streamRetryRef = useRef(0);
   const handleVideoError = () => {
-    if (streamRetryRef.current < 4) {
-      const retryCount = streamRetryRef.current + 1;
-      streamRetryRef.current = retryCount;
-      setIsBuffering(true);
-      setTimeout(() => {
-        const savedTime = videoRef.current?.currentTime || currentTime || 0;
-        const separator = videoSrc.includes('?') ? '&' : '?';
-        const cacheBust = `${separator}retry=${retryCount}&t=${Date.now()}`;
-        if (videoRef.current) {
-          videoRef.current.src = `${videoSrc}${cacheBust}`;
-          videoRef.current.load();
-          videoRef.current.currentTime = savedTime;
-          videoRef.current.play().catch(() => {});
-        }
-        if (bgAudioRef.current) {
-          const aSep = audioSrc.includes('?') ? '&' : '?';
-          bgAudioRef.current.src = `${audioSrc}${aSep}retry=${retryCount}&t=${Date.now()}`;
-          bgAudioRef.current.load();
-          bgAudioRef.current.currentTime = savedTime;
-          bgAudioRef.current.play().catch(() => {});
-        }
-      }, 1000 * retryCount);
-      return;
-    }
     setIsBuffering(false);
-    setStreamError(true);
+    console.warn('Direct stream error on <video>, activating resilient zero-overlay player...');
+    setUseEmbedFallback(true);
+    setStreamError(false);
   };
+
+  // Synchronize playback state and time when in Embed Mode
+  useEffect(() => {
+    if (!useEmbedFallback) return;
+
+    let syncInterval;
+    if (isPlaying) {
+      syncInterval = setInterval(() => {
+        setCurrentTime((prev) => {
+          if (duration > 0 && prev >= duration) {
+            if (isLooping) {
+              sendIframeCommand('seekTo', [0, true]);
+              sendIframeCommand('playVideo');
+              return 0;
+            }
+            handleVideoEnded();
+            return duration;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    }
+
+    const handleWindowMessage = (e) => {
+      try {
+        const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+        if (data && data.event === 'infoDelivery' && data.info) {
+          if (typeof data.info.currentTime === 'number') {
+            setCurrentTime(data.info.currentTime);
+          }
+          if (typeof data.info.duration === 'number' && data.info.duration > 0) {
+            setDuration(data.info.duration);
+          }
+          if (data.info.playerState === 1) {
+            setIsPlaying(true);
+            setIsBuffering(false);
+          } else if (data.info.playerState === 2) {
+            setIsPlaying(false);
+          } else if (data.info.playerState === 0) {
+            if (isLooping) {
+              sendIframeCommand('seekTo', [0, true]);
+              sendIframeCommand('playVideo');
+            } else {
+              handleVideoEnded();
+            }
+          }
+        }
+      } catch (_) {}
+    };
+
+    window.addEventListener('message', handleWindowMessage);
+    return () => {
+      clearInterval(syncInterval);
+      window.removeEventListener('message', handleWindowMessage);
+    };
+  }, [useEmbedFallback, isPlaying, duration, isLooping, handleVideoEnded, sendIframeCommand]);
 
   // Switch video stream on video change - Strictly Unmuted by default
   useEffect(() => {
     setCurrentTime(0);
     setDuration(0);
-    setIsBuffering(true);
+    setIsBuffering(!isVercelDeployment);
     setIsPlaying(true);
+    setStreamError(false);
+    setIsMuted(false);
+    setIsAudioBlocked(false);
+    setVolume(100);
+    shouldBePlayingRef.current = true;
+    if (isVercelDeployment) {
+      setUseEmbedFallback(true);
+    }
     setStreamError(false);
     streamRetryRef.current = 0;
     setIsMuted(false);
@@ -715,6 +791,9 @@ export default function VideoPlayer({
       hasHeldRef.current = true;
       isHolding2xRef.current = true;
       setIsHolding2x(true);
+      if (useEmbedFallback) {
+        sendIframeCommand('setPlaybackRate', [2]);
+      }
       if (videoRef.current) {
         videoRef.current.playbackRate = 2;
       }
@@ -733,11 +812,15 @@ export default function VideoPlayer({
     if (isHolding2xRef.current) {
       isHolding2xRef.current = false;
       setIsHolding2x(false);
+      const restoredRate = previousSpeedRef.current || 1;
+      if (useEmbedFallback) {
+        sendIframeCommand('setPlaybackRate', [restoredRate]);
+      }
       if (videoRef.current) {
-        videoRef.current.playbackRate = previousSpeedRef.current || 1;
+        videoRef.current.playbackRate = restoredRate;
       }
       if (bgAudioRef.current) {
-        bgAudioRef.current.playbackRate = previousSpeedRef.current || 1;
+        bgAudioRef.current.playbackRate = restoredRate;
       }
       return;
     }
@@ -778,11 +861,15 @@ export default function VideoPlayer({
     if (isHolding2xRef.current) {
       isHolding2xRef.current = false;
       setIsHolding2x(false);
+      const restoredRate = previousSpeedRef.current || 1;
+      if (useEmbedFallback) {
+        sendIframeCommand('setPlaybackRate', [restoredRate]);
+      }
       if (videoRef.current) {
-        videoRef.current.playbackRate = previousSpeedRef.current || 1;
+        videoRef.current.playbackRate = restoredRate;
       }
       if (bgAudioRef.current) {
-        bgAudioRef.current.playbackRate = previousSpeedRef.current || 1;
+        bgAudioRef.current.playbackRate = restoredRate;
       }
     }
   };
@@ -802,14 +889,18 @@ export default function VideoPlayer({
 
   // Seek on scrubber
   const handleScrub = (e) => {
-    if (!progressTrackRef.current || !duration || !videoRef.current) return;
+    if (!progressTrackRef.current || !duration) return;
     const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
     const rect = progressTrackRef.current.getBoundingClientRect();
     const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const targetTime = pos * duration;
     setCurrentTime(targetTime);
-    videoRef.current.currentTime = targetTime;
-    if (bgAudioRef.current) bgAudioRef.current.currentTime = targetTime;
+    if (useEmbedFallback) {
+      sendIframeCommand('seekTo', [targetTime, true]);
+    } else if (videoRef.current) {
+      videoRef.current.currentTime = targetTime;
+      if (bgAudioRef.current) bgAudioRef.current.currentTime = targetTime;
+    }
   };
 
   const handleProgressHover = (e) => {
@@ -824,6 +915,18 @@ export default function VideoPlayer({
   const handleVolumeChange = (e) => {
     const newVol = Number(e.target.value);
     setVolume(newVol);
+    if (useEmbedFallback) {
+      sendIframeCommand('setVolume', [newVol]);
+      if (newVol > 0 && isMuted) {
+        setIsMuted(false);
+        sendIframeCommand('unMute');
+      } else if (newVol === 0 && !isMuted) {
+        setIsMuted(true);
+        sendIframeCommand('mute');
+      }
+      return;
+    }
+
     const aud = bgAudioRef.current;
     if (aud) {
       aud.volume = newVol / 100;
@@ -841,6 +944,14 @@ export default function VideoPlayer({
   };
 
   const toggleMute = useCallback(() => {
+    if (useEmbedFallback) {
+      const nextMuted = !isMuted;
+      setIsMuted(nextMuted);
+      sendIframeCommand(nextMuted ? 'mute' : 'unMute');
+      if (!nextMuted) sendIframeCommand('setVolume', [volume || 100]);
+      return;
+    }
+
     const aud = bgAudioRef.current;
     if (!aud) return;
     if (isMuted) {
@@ -856,7 +967,7 @@ export default function VideoPlayer({
       aud.muted = true;
       setIsMuted(true);
     }
-  }, [isMuted, volume]);
+  }, [useEmbedFallback, isMuted, volume, sendIframeCommand]);
 
   // Fullscreen
   const toggleFullscreen = useCallback(() => {
@@ -965,6 +1076,9 @@ export default function VideoPlayer({
 
   const changePlaybackSpeed = (speed) => {
     setPlaybackSpeed(speed);
+    if (useEmbedFallback) {
+      sendIframeCommand('setPlaybackRate', [speed]);
+    }
     if (videoRef.current) videoRef.current.playbackRate = speed;
     if (bgAudioRef.current) bgAudioRef.current.playbackRate = speed;
     setShowSettings(false);
@@ -986,61 +1100,59 @@ export default function VideoPlayer({
           onMouseLeave={handleMouseLeave}
           onTouchStart={handleMouseMove}
         >
-          {/* Native HTML5 Video Element - 100% Free of YouTube Iframes and Overlays */}
+          {/* Native HTML5 Video Element or Resilient Zero-Overlay Embed Scaler */}
           <div className="yt-video-embed-box">
-            <video
-              ref={videoRef}
-              className="yt-html5-video"
-              src={videoSrc}
-              poster={video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`}
-              autoPlay
-              playsInline
-              webkit-playsinline="true"
-              x-webkit-airplay="allow"
-              preload="auto"
-              muted={true}
-              loop={isLooping}
-              onPlay={handleVideoPlay}
-              onPause={handleVideoPause}
-              onTimeUpdate={handleTimeUpdate}
-              onLoadedMetadata={handleLoadedMetadata}
-              onEnded={handleVideoEnded}
-              onWaiting={() => setIsBuffering(true)}
-              onPlaying={() => setIsBuffering(false)}
-              onCanPlay={() => {
-                setIsBuffering(false);
-                if (shouldBePlayingRef.current && videoRef.current?.paused) {
-                  videoRef.current.play().catch(() => { });
-                }
-              }}
-              onError={handleVideoError}
-            />
+            {useEmbedFallback ? (
+              <div className="yt-iframe-scaler yt-iframe-fill">
+                <iframe
+                  ref={iframeRef}
+                  className="yt-clean-embed-iframe"
+                  src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(vId)}?autoplay=1&mute=${isMuted ? 1 : 0}&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&disablekb=1&fs=0&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(typeof window !== 'undefined' ? window.location.origin : '')}`}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title={video.title || 'Video Player'}
+                />
+              </div>
+            ) : (
+              <video
+                ref={videoRef}
+                className="yt-html5-video"
+                src={videoSrc}
+                poster={video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`}
+                autoPlay
+                playsInline
+                webkit-playsinline="true"
+                x-webkit-airplay="allow"
+                preload="auto"
+                muted={true}
+                loop={isLooping}
+                onPlay={handleVideoPlay}
+                onPause={handleVideoPause}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                onEnded={handleVideoEnded}
+                onWaiting={() => setIsBuffering(true)}
+                onPlaying={() => setIsBuffering(false)}
+                onCanPlay={() => {
+                  setIsBuffering(false);
+                  if (shouldBePlayingRef.current && videoRef.current?.paused) {
+                    videoRef.current.play().catch(() => { });
+                  }
+                }}
+                onError={handleVideoError}
+              />
+            )}
 
-            {/* Native Stream Error Overlay (Only shown if offline/network fails, tap to retry) */}
-            {streamError && (
+            {/* Native Stream Error Overlay (Only shown if offline/network fails and not using embed fallback) */}
+            {streamError && !useEmbedFallback && (
               <div className="yt-stream-error-overlay">
                 <p>Unable to load video stream</p>
                 <button
                   type="button"
                   className="yt-retry-stream-btn"
                   onClick={() => {
+                    setUseEmbedFallback(true);
                     setStreamError(false);
-                    streamRetryRef.current = 0;
-                    setIsBuffering(true);
-                    const savedTime = currentTime || 0;
-                    const cacheBust = `?manual=${Date.now()}`;
-                    if (videoRef.current) {
-                      videoRef.current.src = `${videoSrc}${cacheBust}`;
-                      videoRef.current.load();
-                      videoRef.current.currentTime = savedTime;
-                      videoRef.current.play().catch(() => {});
-                    }
-                    if (bgAudioRef.current) {
-                      bgAudioRef.current.src = `${audioSrc}${cacheBust}`;
-                      bgAudioRef.current.load();
-                      bgAudioRef.current.currentTime = savedTime;
-                      bgAudioRef.current.play().catch(() => {});
-                    }
                   }}
                 >
                   Retry
@@ -1048,27 +1160,29 @@ export default function VideoPlayer({
               </div>
             )}
 
-            {/* Background Audio Playback Engine for Phone Minimizing / Screen Off */}
-            <audio
-              ref={bgAudioRef}
-              src={audioSrc}
-              preload="auto"
-              playsInline
-              loop={isLooping}
-              onCanPlay={() => {
-                if (shouldBePlayingRef.current && !isMuted && bgAudioRef.current?.paused) {
-                  bgAudioRef.current.volume = volume / 100;
-                  bgAudioRef.current.currentTime = videoRef.current?.currentTime || 0;
-                  bgAudioRef.current.play().catch((err) => {
-                    if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
-                      setIsAudioBlocked(true);
-                    }
-                  });
-                }
-              }}
-              onTimeUpdate={handleAudioTimeUpdate}
-              onEnded={handleVideoEnded}
-            />
+            {/* Background Audio Playback Engine for Phone Minimizing / Screen Off (Native stream mode only) */}
+            {!useEmbedFallback && (
+              <audio
+                ref={bgAudioRef}
+                src={audioSrc}
+                preload="auto"
+                playsInline
+                loop={isLooping}
+                onCanPlay={() => {
+                  if (shouldBePlayingRef.current && !isMuted && bgAudioRef.current?.paused) {
+                    bgAudioRef.current.volume = volume / 100;
+                    bgAudioRef.current.currentTime = videoRef.current?.currentTime || 0;
+                    bgAudioRef.current.play().catch((err) => {
+                      if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+                        setIsAudioBlocked(true);
+                      }
+                    });
+                  }
+                }}
+                onTimeUpdate={handleAudioTimeUpdate}
+                onEnded={handleVideoEnded}
+              />
+            )}
 
             {/* Buffering Spinner Overlay */}
             {isBuffering && (
@@ -1087,7 +1201,10 @@ export default function VideoPlayer({
                 e.stopPropagation();
                 setIsMuted(false);
                 setIsAudioBlocked(false);
-                if (bgAudioRef.current) {
+                if (useEmbedFallback) {
+                  sendIframeCommand('unMute');
+                  sendIframeCommand('setVolume', [volume || 100]);
+                } else if (bgAudioRef.current) {
                   bgAudioRef.current.muted = false;
                   bgAudioRef.current.volume = volume / 100;
                   bgAudioRef.current.currentTime = videoRef.current?.currentTime || 0;
