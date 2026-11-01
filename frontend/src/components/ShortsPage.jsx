@@ -35,13 +35,15 @@ export default function ShortsPage({
   const audioRefs = useRef({});
   const isFetchingRef = useRef(false);
 
-  // Fetch Shorts from API with unlimited infinite page support
+  // Fetch Shorts from API with unlimited infinite page support and zero repetitive reels
   const fetchShorts = useCallback(async (pageNum = 1) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     try {
       if (pageNum === 1 && shorts.length === 0) setLoading(true);
-      const res = await fetch(apiUrl(`/api/videos/shorts?page=${pageNum}&limit=12`));
+      const seenIds = shorts.map((s) => s.videoId || s._id).filter(Boolean).slice(-40).join(',');
+      const excludeParam = seenIds ? `&exclude=${encodeURIComponent(seenIds)}` : '';
+      const res = await fetch(apiUrl(`/api/videos/shorts?page=${pageNum}&limit=12&_t=${Date.now()}${excludeParam}`));
       if (res.ok) {
         const data = await res.json();
         const incoming = data.videos || [];

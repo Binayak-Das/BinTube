@@ -43,19 +43,68 @@ router.get('/home-sections', async (req, res) => {
   }
 });
 
-// Authentic YouTube Shorts Hashtag Pool for unlimited infinite scrolling
-const SHORTS_HASHTAGS = [
-  'shorts', 'funny', 'viral', 'reels', 'comedy',
-  'trendingshorts', 'dance', 'gaming', 'pets', 'satisfying',
-  'entertainment', 'prank', 'magic', 'food', 'sports',
-  'meme', 'animals', 'music', 'art', 'illusions',
-  'facts', 'talent', 'diy', 'cute', 'fails',
-  'standup', 'stunts', 'comedyvideo', 'lifehacks', 'shortsvideo'
-];
+// Authentic YouTube Shorts Categories Pool for diverse, non-repeating infinite scrolling
+const SHORTS_CATEGORIES = {
+  comedy: ['funny', 'comedy', 'prank', 'humor', 'fails', 'standup', 'jokes', 'funnyvideo'],
+  tech: ['tech', 'gadgets', 'technology', 'lifehacks', 'diy', 'smartphones', 'coding'],
+  animals: ['pets', 'animals', 'dogs', 'cats', 'funnyanimals', 'wildlife', 'cutedogs'],
+  facts: ['facts', 'mindblowing', 'science', 'curiosity', 'history', 'didyouknow', 'amazingfacts'],
+  satisfying: ['satisfying', 'art', 'crafts', 'asmr', 'relaxing', 'pottery', 'drawing'],
+  entertainment: ['viral', 'reels', 'magic', 'stunts', 'illusions', 'dance', 'trendingshorts'],
+  gaming: ['gaming', 'gamingclips', 'gameplay', 'gameshorts', 'gta', 'minecraft'],
+  lifestyle: ['food', 'streetfood', 'cooking', 'travel', 'sports', 'fitness', 'workout']
+};
 
-// In-memory pool for deduplicated, authentic YouTube shorts
-const shortsCachePool = new Map();
-let lastShortsHashtagIdx = 0;
+const categoryKeys = Object.keys(SHORTS_CATEGORIES);
+
+// In-memory cache per hashtag with 1-hour TTL: tag -> { shorts, timestamp }
+const tagShortsCache = new Map();
+const TAG_CACHE_TTL = 60 * 60 * 1000;
+
+function normalizeTitleForDedup(title) {
+  return (title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 28);
+}
+
+function extractChannelBrand(name) {
+  return (name || '')
+    .split(/[-–—|•,]/)[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
+function getTitleKeywords(title) {
+  return new Set(
+    (title || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter((w) => w.length >= 4 && !['shorts', 'video', 'viral', 'trending', 'shortsvideo', 'reels', 'tiktok'].includes(w))
+  );
+}
+
+function isKeywordOverlap(kw1, seenKwList) {
+  for (const prev of seenKwList) {
+    let overlap = 0;
+    for (const w of kw1) {
+      if (prev.has(w)) overlap++;
+    }
+    if (overlap >= 2) return true;
+  }
+  return false;
+}
+
+function shuffleArray(arr) {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
 
 async function fetchHashtagShorts(tag) {
   try {
@@ -79,6 +128,8 @@ async function fetchHashtagShorts(tag) {
       data?.contents?.twoColumnBrowseResultsRenderer?.tabs?.[0]?.tabRenderer?.content?.richGridRenderer?.contents || [];
 
     const shorts = [];
+    const seenLocalTitles = new Set();
+
     for (const item of gridItems) {
       const v = item?.richItemRenderer?.content?.videoRenderer;
       if (!v || !v.videoId) continue;
@@ -92,6 +143,10 @@ async function fetchHashtagShorts(tag) {
       if (!isReel) continue;
 
       const title = v.title?.runs?.map((r) => r.text).join('') || 'YouTube Short';
+      const normTitle = normalizeTitleForDedup(title);
+      if (normTitle && seenLocalTitles.has(normTitle)) continue;
+      if (normTitle) seenLocalTitles.add(normTitle);
+
       const channel = v.ownerText?.runs?.[0]?.text || v.shortBylineText?.runs?.[0]?.text || 'Creator';
       const avatar =
         v.avatar?.decoratedAvatarViewModel?.avatar?.avatarViewModel?.image?.sources?.[0]?.url ||
@@ -132,59 +187,156 @@ async function fetchHashtagShorts(tag) {
   }
 }
 
-// Get Dedicated YouTube Shorts Videos (Unlimited infinite loading)
+async function getShortsForTag(tag) {
+  const cleanTag = (tag || '').toLowerCase().trim();
+  const cached = tagShortsCache.get(cleanTag);
+  if (cached && Date.now() - cached.timestamp < TAG_CACHE_TTL && cached.shorts.length > 0) {
+    return cached.shorts;
+  }
+
+  const scraped = await fetchHashtagShorts(cleanTag);
+  if (scraped && scraped.length > 0) {
+    tagShortsCache.set(cleanTag, {
+      shorts: scraped,
+      timestamp: Date.now(),
+    });
+    return scraped;
+  }
+
+  // Fallback: If hashtag scraping yields nothing, search YouTube for short-duration videos
+  try {
+    const fallbackResults = await fetchYouTubeVideos({
+      query: `#shorts ${cleanTag}`,
+      category: 'All',
+      limit: 12,
+    });
+    const fallbackShorts = (fallbackResults?.videos || [])
+      .filter((v) => {
+        const dur = v.duration || '';
+        return dur.match(/^0:[0-5][0-9]$|^1:00$/) || dur === '0:00';
+      })
+      .map((v) => ({
+        ...v,
+        commentsCount: '1.2K',
+        isShort: true,
+      }));
+
+    if (fallbackShorts.length > 0) {
+      tagShortsCache.set(cleanTag, {
+        shorts: fallbackShorts,
+        timestamp: Date.now(),
+      });
+      return fallbackShorts;
+    }
+  } catch (_) {}
+
+  return [];
+}
+
+// Get Dedicated YouTube Shorts Videos (Constantly Fresh, Randomized & Infinite)
 router.get('/shorts', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.max(1, Math.min(24, parseInt(req.query.limit) || 12));
-    const targetCount = page * limit + limit;
+    const excludeParam = req.query.exclude || '';
+    const excludeIds = new Set(
+      excludeParam
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    );
 
-    // Replenish shorts pool if running low
-    if (shortsCachePool.size < targetCount) {
-      const tagsToFetch = [];
-      for (let i = 0; i < 4; i++) {
-        const tag = SHORTS_HASHTAGS[lastShortsHashtagIdx % SHORTS_HASHTAGS.length];
-        lastShortsHashtagIdx++;
-        tagsToFetch.push(tag);
-      }
+    // Pick 4 diverse, distinct categories for this batch
+    let pickedCategories;
+    if (page === 1) {
+      // On page 1: Randomly pick 4 distinct categories so it NEVER repeats the same starting reels on revisit!
+      pickedCategories = shuffleArray(categoryKeys).slice(0, 4);
+    } else {
+      // On subsequent pages: systematically rotate across categories to guarantee variety
+      const offset = (page * 3) % categoryKeys.length;
+      pickedCategories = [
+        categoryKeys[offset],
+        categoryKeys[(offset + 1) % categoryKeys.length],
+        categoryKeys[(offset + 2) % categoryKeys.length],
+        categoryKeys[(offset + 3) % categoryKeys.length],
+      ];
+    }
 
-      const results = await Promise.all(tagsToFetch.map(fetchHashtagShorts));
-      for (const batch of results) {
-        for (const s of batch) {
-          if (!shortsCachePool.has(s.videoId)) {
-            shortsCachePool.set(s.videoId, s);
+    // Pick 1 random tag from each chosen category
+    const tagsToFetch = pickedCategories.map((cat) => {
+      const tags = SHORTS_CATEGORIES[cat];
+      return tags[Math.floor(Math.random() * tags.length)];
+    });
+
+    // Fetch shorts for each tag in parallel
+    const batches = await Promise.all(tagsToFetch.map(getShortsForTag));
+
+    // Interleave & Deduplicate
+    const resultList = [];
+    const seenIds = new Set(excludeIds);
+    const seenTitles = new Set();
+    const seenBrands = new Set();
+    const seenKeywordsList = [];
+    const maxLen = Math.max(...batches.map((b) => b.length), 0);
+
+    for (let i = 0; i < maxLen; i++) {
+      for (const batch of batches) {
+        if (i < batch.length) {
+          const item = batch[i];
+          const id = item.videoId || item._id;
+          const normTitle = normalizeTitleForDedup(item.title);
+          const brand = extractChannelBrand(item.channelName);
+          const kw = getTitleKeywords(item.title);
+
+          const isDuplicateTitle = normTitle && seenTitles.has(normTitle);
+          const isDuplicateBrand = brand && seenBrands.has(brand);
+          const isOverlapping = isKeywordOverlap(kw, seenKeywordsList);
+
+          if (id && !seenIds.has(id) && !isDuplicateTitle && !isDuplicateBrand && !isOverlapping) {
+            seenIds.add(id);
+            if (normTitle) seenTitles.add(normTitle);
+            if (brand) seenBrands.add(brand);
+            seenKeywordsList.push(kw);
+            resultList.push(item);
           }
         }
       }
+      if (resultList.length >= limit) break;
     }
 
-    // Fallback: If still under target, supplement from search with duration <= 60
-    if (shortsCachePool.size < targetCount) {
-      try {
-        const fallbackResults = await fetchYouTubeVideos({
-          query: `#shorts ${SHORTS_HASHTAGS[page % SHORTS_HASHTAGS.length]}`,
-          category: 'All',
-          page: Math.floor(page / 2) + 1,
-          limit: 12,
-        });
-        for (const v of fallbackResults?.videos || []) {
-          if (!shortsCachePool.has(v.videoId)) {
-            shortsCachePool.set(v.videoId, {
-              ...v,
-              commentsCount: '1.2K',
-              isShort: true,
-            });
+    // If still need more to meet limit, draw from other categories
+    if (resultList.length < limit) {
+      for (const cat of categoryKeys) {
+        const altTag = SHORTS_CATEGORIES[cat][0];
+        const extra = await getShortsForTag(altTag);
+        for (const item of extra) {
+          const id = item.videoId || item._id;
+          const normTitle = normalizeTitleForDedup(item.title);
+          const brand = extractChannelBrand(item.channelName);
+          const kw = getTitleKeywords(item.title);
+
+          const isDuplicateTitle = normTitle && seenTitles.has(normTitle);
+          const isDuplicateBrand = brand && seenBrands.has(brand);
+          const isOverlapping = isKeywordOverlap(kw, seenKeywordsList);
+
+          if (id && !seenIds.has(id) && !isDuplicateTitle && !isDuplicateBrand && !isOverlapping) {
+            seenIds.add(id);
+            if (normTitle) seenTitles.add(normTitle);
+            if (brand) seenBrands.add(brand);
+            seenKeywordsList.push(kw);
+            resultList.push(item);
           }
+          if (resultList.length >= limit) break;
         }
-      } catch (_) {}
+        if (resultList.length >= limit) break;
+      }
     }
 
-    const allShorts = Array.from(shortsCachePool.values());
-    const startIndex = (page - 1) * limit;
-    const pageVideos = allShorts.slice(startIndex, startIndex + limit);
+    // Shuffle final page 1 so order is dynamically unique every time
+    const finalVideos = page === 1 ? shuffleArray(resultList).slice(0, limit) : resultList.slice(0, limit);
 
     return res.json({
-      videos: pageVideos.length > 0 ? pageVideos : allShorts.slice(0, limit),
+      videos: finalVideos,
       page,
       hasMore: true,
     });

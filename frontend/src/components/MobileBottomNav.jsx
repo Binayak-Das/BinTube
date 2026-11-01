@@ -47,21 +47,12 @@ export default function MobileBottomNav({
         <span>Subscriptions</span>
       </button>
 
-      {/* You (Profile / History / Library) */}
+      {/* You (Profile Details, Shortcuts & Log out) */}
       <button
         type="button"
-        className={`mobile-nav-item ${
-          ['history', 'liked', 'playlists', 'watch-later'].includes(activePage) ? 'active' : ''
-        }`}
-        onClick={() => {
-          if (currentUser) {
-            onNavigate('history');
-          } else if (onRequireAuth) {
-            onRequireAuth();
-          } else {
-            onNavigate('history');
-          }
-        }}
+        className={`mobile-nav-item ${activePage === 'you' ? 'active' : ''}`}
+        onClick={() => onNavigate('you')}
+        title="Account and Library"
       >
         {userInitial ? (
           <div className="mobile-user-avatar-badge">{userInitial}</div>

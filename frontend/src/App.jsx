@@ -17,6 +17,7 @@ import AuthModal from './components/AuthModal.jsx';
 import ShortsCard from './components/ShortsCard.jsx';
 import ShortsPage from './components/ShortsPage.jsx';
 import MobileBottomNav from './components/MobileBottomNav.jsx';
+import YouPage from './components/YouPage.jsx';
 import { ShortsIcon } from './components/Icons.jsx';
 import { apiUrl } from './config/api.js';
 
@@ -37,6 +38,8 @@ const VALID_ROUTES = new Set([
   '/watch-later',
   '/playlists',
   '/playlist',
+  '/you',
+  '/feed/you',
 ]);
 
 export default function App() {
@@ -75,6 +78,8 @@ export default function App() {
     pathname === '/playlist'
   ) {
     activePage = 'playlists';
+  } else if (pathname === '/you' || pathname === '/feed/you') {
+    activePage = 'you';
   } else if (pathname === '/results' || pathname === '/search') {
     activePage = 'search';
   } else if (pathname === '/watch') {
@@ -247,6 +252,8 @@ export default function App() {
       document.title = 'Liked videos - YouTube';
     } else if (activePage === 'playlists') {
       document.title = 'Playlists - YouTube';
+    } else if (activePage === 'you') {
+      document.title = 'You - YouTube';
     } else if (activePage === 'search') {
       document.title = searchQuery
         ? `${searchQuery} - YouTube Search`
@@ -346,7 +353,7 @@ export default function App() {
         if (isHomeAllInitial) {
           const [videoRes, shortsRes] = await Promise.all([
             fetch(apiUrl(`/api/videos?${params.toString()}`)),
-            fetch(apiUrl('/api/videos/shorts?limit=8')),
+            fetch(apiUrl(`/api/videos/shorts?limit=8&_t=${Date.now()}`)),
           ]);
           res = videoRes;
           data = videoRes.ok ? await videoRes.json() : null;
@@ -550,8 +557,14 @@ export default function App() {
       loadSubscriptions();
     } else if (activePage === 'playlists') {
       loadPlaylists();
+    } else if (activePage === 'you') {
+      if (user) loadHistory();
+      loadWatchLaterVideos();
+      loadLikedVideos();
+      loadSubscriptions();
+      loadPlaylists();
     }
-  }, [activePage, loadWatchLaterVideos, loadLikedVideos, loadSubscriptions, loadPlaylists]);
+  }, [activePage, user, loadHistory, loadWatchLaterVideos, loadLikedVideos, loadSubscriptions, loadPlaylists]);
 
   // Dedicated Navigation Handlers with real URLs
   const handleNavigate = (pageName) => {
@@ -572,6 +585,8 @@ export default function App() {
       navigate('/watch-later');
     } else if (pageName === 'playlists') {
       navigate('/playlists');
+    } else if (pageName === 'you') {
+      navigate('/you');
     } else if (pageName === 'search') {
       setLoading(true);
       navigate(`/results?search_query=${encodeURIComponent(searchQuery || '')}`);
@@ -1437,6 +1452,23 @@ export default function App() {
               onToggleSubscribe={handleToggleSubscribe}
               currentUser={user}
               onRequireAuth={requireAuth}
+            />
+          )}
+
+          {/* DEDICATED YOU PAGE (Mobile Bottom Nav You Hub with Profile, Shortcuts & Log out) */}
+          {activePage === 'you' && (
+            <YouPage
+              currentUser={user}
+              onLogout={handleLogout}
+              onOpenAuth={() => setIsAuthModalOpen(true)}
+              onNavigate={handleNavigate}
+              historyVideos={historyVideos}
+              watchLaterCount={watchLaterIds.length}
+              likedCount={likedVideos.length}
+              subscriptionsCount={subscribedChannels.length}
+              playlists={playlists}
+              onSelectVideo={handleSelectVideo}
+              onNotify={showToast}
             />
           )}
 

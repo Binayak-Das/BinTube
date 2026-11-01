@@ -86,7 +86,7 @@ export default function VideoPlayer({
   const [showSettings, setShowSettings] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [showUnlockPill, setShowUnlockPill] = useState(false);
-  const [useEmbedFallback, setUseEmbedFallback] = useState(false);
+  const [streamError, setStreamError] = useState(false);
   const [settingsView, setSettingsView] = useState('main'); // 'main' or 'speed'
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isLooping, setIsLooping] = useState(() => localStorage.getItem('yt_loop') === 'true');
@@ -448,18 +448,17 @@ export default function VideoPlayer({
   const streamRetryRef = useRef(0);
   const handleVideoError = () => {
     setIsBuffering(false);
-    if (streamRetryRef.current < 2) {
+    if (streamRetryRef.current < 3) {
       streamRetryRef.current += 1;
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.load();
           videoRef.current.play().catch(() => {});
         }
-      }, 800);
+      }, 1000);
       return;
     }
-    // Clean zero-overlay fallback only after stream retries exhausted
-    setUseEmbedFallback(true);
+    setStreamError(true);
   };
 
   // Switch video stream on video change - Strictly Unmuted by default
@@ -468,7 +467,8 @@ export default function VideoPlayer({
     setDuration(0);
     setIsBuffering(true);
     setIsPlaying(true);
-    setUseEmbedFallback(false);
+    setStreamError(false);
+    streamRetryRef.current = 0;
     setIsMuted(false);
     setVolume(100);
     shouldBePlayingRef.current = true;
@@ -959,45 +959,55 @@ export default function VideoPlayer({
           onMouseLeave={handleMouseLeave}
           onTouchStart={handleMouseMove}
         >
-          {/* Native HTML5 Video Element with resilient IFrame Fallback */}
+          {/* Native HTML5 Video Element - 100% Free of YouTube Iframes and Overlays */}
           <div className="yt-video-embed-box">
-            {useEmbedFallback ? (
-              <div className="yt-no-overlay-embed-clipper">
-                <iframe
-                  className="yt-no-overlay-embed-frame"
-                  src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(vId)}?autoplay=1&controls=0&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&disablekb=1&fs=0`}
-                  allow="accelerometer; autoplay; encrypted-media; picture-in-picture"
-                  allowFullScreen
-                  title={video.title}
-                />
+            <video
+              ref={videoRef}
+              className="yt-html5-video"
+              src={videoSrc}
+              poster={video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`}
+              autoPlay
+              playsInline
+              webkit-playsinline="true"
+              x-webkit-airplay="allow"
+              preload="auto"
+              loop={isLooping}
+              onPlay={handleVideoPlay}
+              onPause={handleVideoPause}
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={handleLoadedMetadata}
+              onEnded={handleVideoEnded}
+              onWaiting={() => setIsBuffering(true)}
+              onPlaying={() => setIsBuffering(false)}
+              onCanPlay={() => {
+                setIsBuffering(false);
+                if (shouldBePlayingRef.current && videoRef.current?.paused) {
+                  videoRef.current.play().catch(() => { });
+                }
+              }}
+              onError={handleVideoError}
+            />
+
+            {/* Native Stream Error Overlay (Only shown if offline/network fails, tap to retry) */}
+            {streamError && (
+              <div className="yt-stream-error-overlay">
+                <p>Unable to load video stream</p>
+                <button
+                  type="button"
+                  className="yt-retry-stream-btn"
+                  onClick={() => {
+                    setStreamError(false);
+                    streamRetryRef.current = 0;
+                    setIsBuffering(true);
+                    if (videoRef.current) {
+                      videoRef.current.load();
+                      videoRef.current.play().catch(() => {});
+                    }
+                  }}
+                >
+                  Retry
+                </button>
               </div>
-            ) : (
-              <video
-                ref={videoRef}
-                className="yt-html5-video"
-                src={videoSrc}
-                poster={video.thumbnailUrl || `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`}
-                autoPlay
-                playsInline
-                webkit-playsinline="true"
-                x-webkit-airplay="allow"
-                preload="auto"
-                loop={isLooping}
-                onPlay={handleVideoPlay}
-                onPause={handleVideoPause}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={handleLoadedMetadata}
-                onEnded={handleVideoEnded}
-                onWaiting={() => setIsBuffering(true)}
-                onPlaying={() => setIsBuffering(false)}
-                onCanPlay={() => {
-                  setIsBuffering(false);
-                  if (shouldBePlayingRef.current && videoRef.current?.paused) {
-                    videoRef.current.play().catch(() => { });
-                  }
-                }}
-                onError={handleVideoError}
-              />
             )}
 
             {/* Background Audio Playback Engine for Phone Minimizing / Screen Off */}

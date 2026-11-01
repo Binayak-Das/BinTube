@@ -2350,6 +2350,36 @@ textarea {
   pointer-events: none;
 }
 
+.yt-stream-error-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(15, 15, 15, 0.92);
+  z-index: 10;
+  color: #fff;
+  font-size: 14px;
+}
+
+.yt-retry-stream-btn {
+  background: #ff0000;
+  color: #fff;
+  border: none;
+  padding: 8px 18px;
+  border-radius: 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.yt-retry-stream-btn:hover {
+  opacity: 0.9;
+}
+
 .yt-iframe-scaler,
 .yt-iframe-fill {
   position: absolute;
@@ -7473,4 +7503,450 @@ textarea {
 .not-found-home-btn:hover {
   opacity: 0.9;
   transform: translateY(-1px);
+}
+
+/* ==========================================================================
+   YOU PAGE - MOBILE BOTTOM NAV HUB (Profile, Shortcuts & Log out)
+   ========================================================================== */
+.you-page-container {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 16px 16px 80px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Profile Card */
+.you-profile-card {
+  background: #181818;
+  border-radius: 16px;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.you-profile-content {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.you-avatar-box {
+  flex-shrink: 0;
+}
+
+.you-avatar-large {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: #5f7d8c;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 700;
+  text-transform: uppercase;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.you-profile-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.you-profile-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.you-profile-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #aaa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.you-dot {
+  opacity: 0.6;
+}
+
+.you-profile-actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.you-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.you-logout-btn:hover {
+  background: rgba(255, 78, 69, 0.2);
+  color: #ff4e45;
+  border-color: rgba(255, 78, 69, 0.4);
+}
+
+/* Signed Out State Card */
+.you-signed-out-card {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.you-avatar-placeholder {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  flex-shrink: 0;
+}
+
+.you-signed-out-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.you-signed-out-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+}
+
+.you-signed-out-desc {
+  font-size: 13px;
+  color: #aaa;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.you-signin-btn {
+  align-self: flex-start;
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  border-radius: 20px;
+  background: #3ea6ff;
+  color: #0f0f0f;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.you-signin-btn:hover {
+  opacity: 0.9;
+}
+
+/* Shelf Sections (History & Playlists horizontal previews) */
+.you-shelf-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.you-shelf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.you-shelf-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.you-shelf-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+}
+
+.you-shelf-badge {
+  background: rgba(255, 255, 255, 0.1);
+  color: #aaa;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.you-shelf-see-all-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #3ea6ff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.you-shelf-see-all-btn:hover {
+  background: rgba(62, 166, 255, 0.1);
+}
+
+.you-shelf-carousel {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.you-shelf-carousel::-webkit-scrollbar {
+  display: none;
+}
+
+.you-carousel-card {
+  flex: 0 0 170px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.you-card-thumb-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #212121;
+}
+
+.you-card-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.you-card-duration {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.you-playlist-count-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.you-card-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  margin: 0;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.you-card-channel {
+  font-size: 11px;
+  color: #aaa;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shortcuts Section */
+.you-shortcuts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #181818;
+  border-radius: 16px;
+  padding: 12px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.you-shortcuts-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 4px 0 6px 8px;
+}
+
+.you-shortcuts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.you-shortcut-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  color: #fff;
+  transition: background-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.you-shortcut-row:hover,
+.you-shortcut-row:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.you-shortcut-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.you-shortcut-icon-box {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.you-shortcut-text-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.you-shortcut-label {
+  font-size: 15px;
+  font-weight: 500;
+  color: #fff;
+  line-height: 1.2;
+}
+
+.you-shortcut-sub {
+  font-size: 12px;
+  color: #888;
+  line-height: 1;
+}
+
+.you-shortcut-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #888;
+}
+
+.you-count-pill {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.you-shortcut-chevron {
+  font-size: 20px;
+  font-weight: 300;
+  color: #666;
+  line-height: 1;
+}
+
+@media (max-width: 768px) {
+  .you-page-container {
+    padding: 12px 12px 70px 12px;
+    gap: 16px;
+  }
+
+  .you-profile-card {
+    padding: 16px 14px;
+    border-radius: 14px;
+  }
+
+  .you-avatar-large {
+    width: 60px;
+    height: 60px;
+    font-size: 24px;
+  }
+
+  .you-profile-name {
+    font-size: 18px;
+  }
+
+  .you-shortcuts-section {
+    border-radius: 14px;
+    padding: 10px 6px;
+  }
+
+  .you-shortcut-row {
+    padding: 11px 10px;
+  }
 }
