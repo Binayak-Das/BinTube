@@ -31,6 +31,9 @@ import { apiUrl, isVercelDeployment } from '../config/api.js';
 const NO_SLEEP_VIDEO_SRC =
   'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAr9tZGF0AAACoAYF//+///AAAAMmF2Y0MBZAAK/+EAGWdkAAqs2V+WXAWyAAADAAIAAAMAYB4kSywBAAZo6+PLIsAAAAAYc3R0cwAAAAAAAAABAAAAAQAAAgAAAAAcc3RzYwAAAAAAAAABAAAAAQAAAAEAAAABAAAAFHN0c3oAAAAAAAACtwAAAAEAAAAUc3RjbwAAAAAAAAABAAAAMAAAAGJ1ZHRhAAAAWm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALWlsc3QAAAAlqXRvbwAAAB1kYXRhAAAAAQAAAABMYXZmNTQuNjMuMTA0';
 
+// Playback speed options matching YouTube standard presets
+const SPEED_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
 // Format seconds to mm:ss or hh:mm:ss
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -361,10 +364,10 @@ export default function VideoPlayer({
     }, 550);
   }, []);
 
-  // UI Ripple feedback for double-tap seeking
-  const triggerRipple = useCallback((direction) => {
+  // UI Ripple feedback for double-tap and keyboard seeking
+  const triggerRipple = useCallback((direction, seconds = 10) => {
     if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
-    setRipple(direction);
+    setRipple({ direction, seconds });
     rippleTimerRef.current = setTimeout(() => {
       setRipple(null);
     }, 650);
@@ -414,15 +417,16 @@ export default function VideoPlayer({
   // Seek relative (forward / backward seconds)
   const seekRelative = useCallback((seconds) => {
     const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
+    const absSeconds = Math.abs(seconds);
     if (useEmbedFallback) {
       const maxTime = targetDur || 999999;
       const target = Math.max(0, Math.min(maxTime, currentTime + seconds));
       setCurrentTime(target);
       sendIframeCommand('seekTo', [target, true]);
       if (seconds < 0) {
-        triggerRipple('left');
+        triggerRipple('left', absSeconds);
       } else {
-        triggerRipple('right');
+        triggerRipple('right', absSeconds);
       }
       return;
     }
@@ -441,9 +445,9 @@ export default function VideoPlayer({
     setCurrentTime(target);
 
     if (seconds < 0) {
-      triggerRipple('left');
+      triggerRipple('left', absSeconds);
     } else {
-      triggerRipple('right');
+      triggerRipple('right', absSeconds);
     }
   }, [useEmbedFallback, duration, currentTime, video?.duration, sendIframeCommand, triggerRipple]);
 
@@ -802,7 +806,7 @@ export default function VideoPlayer({
   };
 
   // Autohide controls logic
-  const handleMouseMove = () => {
+  const handleMouseMove = useCallback(() => {
     if (isLocked) return;
     setShowControls(true);
     if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
@@ -811,7 +815,7 @@ export default function VideoPlayer({
         setShowControls(false);
       }, getHideDelay());
     }
-  };
+  }, [isLocked, isPlaying, showSettings]);
 
   const handleMouseLeave = () => {
     if (isPlaying && !showSettings && !isLocked) {
@@ -985,6 +989,104 @@ export default function VideoPlayer({
     }
   };
 
+  const adjustVolume = useCallback((delta) => {
+    setVolume((prevVol) => {
+      let nextVol;
+      let nextMuted = false;
+
+      if (isMuted) {
+        if (delta > 0) {
+          const base = prevVol === 0 ? 0 : prevVol;
+          nextVol = Math.min(100, Math.max(5, base + delta));
+          nextMuted = false;
+        } else {
+          nextVol = Math.max(0, prevVol + delta);
+          nextMuted = nextVol === 0;
+        }
+      } else {
+        nextVol = Math.max(0, Math.min(100, prevVol + delta));
+        nextMuted = nextVol === 0;
+      }
+
+      setIsMuted(nextMuted);
+
+      if (useEmbedFallback) {
+        sendIframeCommand('setVolume', [nextVol]);
+        if (nextMuted) {
+          sendIframeCommand('mute');
+        } else {
+          sendIframeCommand('unMute');
+        }
+      } else {
+        const aud = bgAudioRef.current;
+        if (aud) {
+          aud.volume = nextVol / 100;
+          aud.muted = nextMuted;
+          if (!nextMuted && aud.paused && shouldBePlayingRef.current) {
+            aud.play().catch(() => {});
+          }
+        }
+      }
+
+      if (typeof onNotify === 'function') {
+        onNotify(`${nextVol}% volume`);
+      }
+
+      return nextVol;
+    });
+
+    handleMouseMove();
+  }, [isMuted, useEmbedFallback, sendIframeCommand, onNotify, handleMouseMove]);
+
+  const changePlaybackSpeed = useCallback((speed) => {
+    setPlaybackSpeed(speed);
+    if (useEmbedFallback) {
+      sendIframeCommand('setPlaybackRate', [speed]);
+    }
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+    if (bgAudioRef.current) bgAudioRef.current.playbackRate = speed;
+    setShowSettings(false);
+    setSettingsView('main');
+    if (typeof onNotify === 'function') {
+      onNotify(`${speed}x speed`);
+    }
+  }, [useEmbedFallback, sendIframeCommand, onNotify]);
+
+  const increasePlaybackSpeed = useCallback(() => {
+    const nextSpeed = SPEED_OPTIONS.find((s) => s > playbackSpeed + 0.01) ?? SPEED_OPTIONS[SPEED_OPTIONS.length - 1];
+    changePlaybackSpeed(nextSpeed);
+    handleMouseMove();
+  }, [playbackSpeed, changePlaybackSpeed, handleMouseMove]);
+
+  const decreasePlaybackSpeed = useCallback(() => {
+    const prevOptions = SPEED_OPTIONS.filter((s) => s < playbackSpeed - 0.01);
+    const prevSpeed = prevOptions.length > 0 ? prevOptions[prevOptions.length - 1] : SPEED_OPTIONS[0];
+    changePlaybackSpeed(prevSpeed);
+    handleMouseMove();
+  }, [playbackSpeed, changePlaybackSpeed, handleMouseMove]);
+
+  const seekToPercent = useCallback((fraction) => {
+    const targetDur = (duration > 0 ? duration : null)
+      || (videoRef.current?.duration > 0 ? videoRef.current.duration : null)
+      || parseDuration(video?.duration)
+      || 0;
+
+    const targetTime = targetDur > 0 ? Math.max(0, Math.min(targetDur, targetDur * fraction)) : 0;
+
+    setCurrentTime(targetTime);
+    if (useEmbedFallback) {
+      sendIframeCommand('seekTo', [targetTime, true]);
+    } else {
+      if (videoRef.current) {
+        videoRef.current.currentTime = targetTime;
+      }
+      if (bgAudioRef.current) {
+        bgAudioRef.current.currentTime = targetTime;
+      }
+    }
+    handleMouseMove();
+  }, [duration, video?.duration, useEmbedFallback, sendIframeCommand, handleMouseMove]);
+
   const toggleMute = useCallback(() => {
     if (useEmbedFallback) {
       const nextMuted = !isMuted;
@@ -1025,17 +1127,56 @@ export default function VideoPlayer({
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (isLocked) return;
-      if (['input', 'textarea', 'select'].includes(document.activeElement?.tagName?.toLowerCase())) return;
+      const activeTag = document.activeElement?.tagName?.toLowerCase();
+      const activeType = document.activeElement?.type?.toLowerCase();
+      if (
+        document.activeElement?.isContentEditable ||
+        activeTag === 'textarea' ||
+        activeTag === 'select' ||
+        (activeTag === 'input' && activeType !== 'range')
+      ) {
+        return;
+      }
 
-      if (e.code === 'Space' || e.code === 'KeyK') {
+      // Shift + > or Shift + < for playback speed adjustment
+      const isSpeedUp = e.key === '>' || (e.shiftKey && (e.code === 'Period' || e.key === '.'));
+      const isSpeedDown = e.key === '<' || (e.shiftKey && (e.code === 'Comma' || e.key === ','));
+
+      if (isSpeedUp) {
+        e.preventDefault();
+        increasePlaybackSpeed();
+      } else if (isSpeedDown) {
+        e.preventDefault();
+        decreasePlaybackSpeed();
+      } else if (e.key === 'ArrowRight' || e.code === 'ArrowRight') {
+        e.preventDefault();
+        seekRelative(5);
+        handleMouseMove();
+      } else if (e.key === 'ArrowLeft' || e.code === 'ArrowLeft') {
+        e.preventDefault();
+        seekRelative(-5);
+        handleMouseMove();
+      } else if (e.key === 'ArrowUp' || e.code === 'ArrowUp') {
+        e.preventDefault();
+        adjustVolume(5);
+      } else if (e.key === 'ArrowDown' || e.code === 'ArrowDown') {
+        e.preventDefault();
+        adjustVolume(-5);
+      } else if (!e.ctrlKey && !e.altKey && !e.metaKey && /^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        const digit = parseInt(e.key, 10);
+        seekToPercent(digit * 0.1);
+      } else if (e.code === 'Space' || e.code === 'KeyK') {
         e.preventDefault();
         togglePlayPause();
       } else if (e.code === 'KeyL') {
         e.preventDefault();
         seekRelative(10);
+        handleMouseMove();
       } else if (e.code === 'KeyJ') {
         e.preventDefault();
         seekRelative(-10);
+        handleMouseMove();
       } else if (e.code === 'KeyM') {
         e.preventDefault();
         toggleMute();
@@ -1045,12 +1186,27 @@ export default function VideoPlayer({
       } else if (e.code === 'KeyT') {
         e.preventDefault();
         setIsTheater((prev) => !prev);
+      } else if (e.shiftKey && (e.code === 'KeyN' || e.key === 'N')) {
+        e.preventDefault();
+        if (playNextVideo) playNextVideo();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlayPause, seekRelative, toggleMute, toggleFullscreen, isLocked]);
+  }, [
+    isLocked,
+    togglePlayPause,
+    seekRelative,
+    adjustVolume,
+    increasePlaybackSpeed,
+    decreasePlaybackSpeed,
+    seekToPercent,
+    toggleMute,
+    toggleFullscreen,
+    playNextVideo,
+    handleMouseMove,
+  ]);
 
   // Social / Share via Native Web Share API
   const handleShare = async () => {
@@ -1114,18 +1270,6 @@ export default function VideoPlayer({
     if (videoRef.current) videoRef.current.loop = nextVal;
     if (bgAudioRef.current) bgAudioRef.current.loop = nextVal;
     onNotify(nextVal ? 'Loop video is on' : 'Loop video is off');
-  };
-
-  const changePlaybackSpeed = (speed) => {
-    setPlaybackSpeed(speed);
-    if (useEmbedFallback) {
-      sendIframeCommand('setPlaybackRate', [speed]);
-    }
-    if (videoRef.current) videoRef.current.playbackRate = speed;
-    if (bgAudioRef.current) bgAudioRef.current.playbackRate = speed;
-    setShowSettings(false);
-    setSettingsView('main');
-    onNotify(`${speed}x speed`);
   };
 
   const effectiveDuration = duration > 0 ? duration : parseDuration(video?.duration);
@@ -1306,20 +1450,20 @@ export default function VideoPlayer({
             </div>
           )}
 
-          {/* Double Tap Seek Feedback (Right: +10s, Left: -10s) */}
-          {ripple === 'right' && (
+          {/* Double Tap & Keyboard Seek Feedback (Right / Left) */}
+          {ripple && (ripple.direction === 'right' || ripple === 'right') && (
             <div className="yt-seek-ripple ripple-right">
               <div className="ripple-circle">
                 <Forward10Icon size={34} />
-                <span className="ripple-text">+10 seconds</span>
+                <span className="ripple-text">+{ripple.seconds || 10} seconds</span>
               </div>
             </div>
           )}
-          {ripple === 'left' && (
+          {ripple && (ripple.direction === 'left' || ripple === 'left') && (
             <div className="yt-seek-ripple ripple-left">
               <div className="ripple-circle">
                 <Rewind10Icon size={34} />
-                <span className="ripple-text">-10 seconds</span>
+                <span className="ripple-text">-{ripple.seconds || 10} seconds</span>
               </div>
             </div>
           )}
@@ -1420,7 +1564,7 @@ export default function VideoPlayer({
                           ? 'rgba(255, 255, 255, 0.25)'
                           : `linear-gradient(to right, #ffffff ${volume}%, rgba(255, 255, 255, 0.25) ${volume}%)`,
                     }}
-                    title={`Volume ${isMuted ? 0 : volume}%`}
+                    title={`Volume ${isMuted ? 0 : volume}% (Up/Down arrow)`}
                   />
                 </div>
 
@@ -1483,7 +1627,7 @@ export default function VideoPlayer({
                             </div>
 
                             <div className="yt-settings-scroll-list">
-                              {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((spd) => (
+                              {SPEED_OPTIONS.map((spd) => (
                                 <div
                                   key={spd}
                                   className={`yt-menu-row ${playbackSpeed === spd ? 'active-row' : ''}`}
@@ -1516,6 +1660,7 @@ export default function VideoPlayer({
                             <div
                               className="yt-menu-row yt-menu-row-navigable yt-settings-row-interactive"
                               onClick={() => setSettingsView('speed')}
+                              title="Playback speed (Shift + > / Shift + <)"
                             >
                               <div className="yt-menu-row-left">
                                 <SpeedometerIcon size={18} />
