@@ -99,6 +99,10 @@ export default function VideoPlayer({
   const shouldBePlayingRef = useRef(true);
   const settingsMenuRef = useRef(null);
   const iframeRef = useRef(null);
+  const currentTimeRef = useRef(0);
+  const lastSeekTimeRef = useRef(0);
+  const pendingSeekTargetRef = useRef(null);
+  const tapStreakRef = useRef({ count: 0, side: null, lastTime: 0 });
 
   const [useEmbedFallback, setUseEmbedFallback] = useState(() => isVercelDeployment);
 
@@ -416,40 +420,59 @@ export default function VideoPlayer({
 
   // Seek relative (forward / backward seconds)
   const seekRelative = useCallback((seconds) => {
-    const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
+    const targetDur = (duration > 0 ? duration : null)
+      || (videoRef.current?.duration > 0 ? videoRef.current.duration : null)
+      || parseDuration(video?.duration)
+      || 0;
+    const maxTime = targetDur > 0 ? targetDur : 999999;
     const absSeconds = Math.abs(seconds);
-    if (useEmbedFallback) {
-      const maxTime = targetDur || 999999;
-      const target = Math.max(0, Math.min(maxTime, currentTime + seconds));
-      setCurrentTime(target);
-      sendIframeCommand('seekTo', [target, true]);
-      if (seconds < 0) {
-        triggerRipple('left', absSeconds);
-      } else {
-        triggerRipple('right', absSeconds);
+
+    // Get current position authoritatively from currentTimeRef so rapid consecutive seeks accumulate accurately
+    let currentPos = currentTimeRef.current;
+
+    // In direct HTML5 mode, sync with active element if no seek is in flight
+    if (!useEmbedFallback) {
+      const vid = videoRef.current;
+      const aud = bgAudioRef.current;
+      const activeEl = document.hidden && aud && !aud.paused ? aud : vid;
+      if (activeEl && !isNaN(activeEl.currentTime) && activeEl.currentTime >= 0) {
+        const isRecentSeek = Date.now() - lastSeekTimeRef.current < 600;
+        if (!isRecentSeek) {
+          currentPos = activeEl.currentTime;
+        }
       }
-      return;
     }
 
-    const vid = videoRef.current;
-    const aud = bgAudioRef.current;
-    if (!vid) return;
+    const target = Math.max(0, Math.min(maxTime, currentPos + seconds));
 
-    const activeEl = document.hidden && aud && !aud.paused ? aud : vid;
-    const cur = activeEl.currentTime || 0;
-    const dur = activeEl.duration || targetDur || 0;
-    const target = Math.max(0, Math.min(dur || 999999, cur + seconds));
-
-    vid.currentTime = target;
-    if (aud) aud.currentTime = target;
+    currentTimeRef.current = target;
     setCurrentTime(target);
+    lastSeekTimeRef.current = Date.now();
+    pendingSeekTargetRef.current = target;
+
+    if (useEmbedFallback) {
+      sendIframeCommand('seekTo', [target, true]);
+    } else {
+      const vid = videoRef.current;
+      const aud = bgAudioRef.current;
+      if (vid) {
+        try {
+          vid.currentTime = target;
+        } catch (_) {}
+      }
+      if (aud) {
+        try {
+          aud.currentTime = target;
+        } catch (_) {}
+      }
+    }
 
     if (seconds < 0) {
       triggerRipple('left', absSeconds);
     } else {
       triggerRipple('right', absSeconds);
     }
-  }, [useEmbedFallback, duration, currentTime, video?.duration, sendIframeCommand, triggerRipple]);
+  }, [useEmbedFallback, duration, video?.duration, sendIframeCommand, triggerRipple]);
 
   // Native HTML5 <video> Event Handlers
   const handleVideoPlay = () => {
@@ -478,10 +501,15 @@ export default function VideoPlayer({
 
   const handleTimeUpdate = () => {
     if (videoRef.current && !document.hidden) {
+      // Don't overwrite time during an active seek
+      const isRecentSeek = Date.now() - lastSeekTimeRef.current < 500;
+      if (isRecentSeek && videoRef.current.seeking) return;
+
       const vTime = videoRef.current.currentTime || 0;
+      currentTimeRef.current = vTime;
       setCurrentTime(vTime);
       const aud = bgAudioRef.current;
-      if (aud && Math.abs(vTime - aud.currentTime) > 0.25) {
+      if (aud && !aud.seeking && !videoRef.current.seeking && Math.abs(vTime - aud.currentTime) > 0.3) {
         aud.currentTime = vTime;
       }
     }
@@ -489,7 +517,9 @@ export default function VideoPlayer({
 
   const handleAudioTimeUpdate = () => {
     if (bgAudioRef.current && document.hidden) {
-      setCurrentTime(bgAudioRef.current.currentTime || 0);
+      const aTime = bgAudioRef.current.currentTime || 0;
+      currentTimeRef.current = aTime;
+      setCurrentTime(aTime);
     }
   };
 
@@ -538,18 +568,24 @@ export default function VideoPlayer({
           }
         } catch (_) {}
 
+        // Don't advance time artificially if user just seeked within 600ms
+        if (Date.now() - lastSeekTimeRef.current < 600) return;
+
         setCurrentTime((prev) => {
           const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
           if (targetDur > 0 && prev >= targetDur) {
             if (isLooping) {
               sendIframeCommand('seekTo', [0, true]);
               sendIframeCommand('playVideo');
+              currentTimeRef.current = 0;
               return 0;
             }
             handleVideoEnded();
             return targetDur;
           }
-          return prev + 1;
+          const nextTime = prev + 1;
+          currentTimeRef.current = nextTime;
+          return nextTime;
         });
       }, 1000);
     }
@@ -562,7 +598,19 @@ export default function VideoPlayer({
         const info = data.info || (typeof data.data === 'object' ? data.data : null);
         if (info && typeof info === 'object') {
           if (typeof info.currentTime === 'number' && !isNaN(info.currentTime)) {
-            setCurrentTime(info.currentTime);
+            // Discard stale pre-seek time reports from iframe
+            const isRecentSeek = Date.now() - lastSeekTimeRef.current < 1000;
+            if (isRecentSeek && pendingSeekTargetRef.current !== null) {
+              if (Math.abs(info.currentTime - pendingSeekTargetRef.current) < 1.5) {
+                pendingSeekTargetRef.current = null;
+                currentTimeRef.current = info.currentTime;
+                setCurrentTime(info.currentTime);
+              }
+            } else {
+              pendingSeekTargetRef.current = null;
+              currentTimeRef.current = info.currentTime;
+              setCurrentTime(info.currentTime);
+            }
           }
           if (typeof info.duration === 'number' && info.duration > 0) {
             setDuration(info.duration);
@@ -576,6 +624,7 @@ export default function VideoPlayer({
             if (isLooping) {
               sendIframeCommand('seekTo', [0, true]);
               sendIframeCommand('playVideo');
+              currentTimeRef.current = 0;
             } else {
               handleVideoEnded();
             }
@@ -601,6 +650,10 @@ export default function VideoPlayer({
 
   // Switch video stream on video change - Strictly Unmuted by default
   useEffect(() => {
+    currentTimeRef.current = 0;
+    lastSeekTimeRef.current = 0;
+    pendingSeekTargetRef.current = null;
+    tapStreakRef.current = { count: 0, side: null, lastTime: 0 };
     setCurrentTime(0);
     const parsedDur = parseDuration(video?.duration);
     setDuration(parsedDur);
@@ -737,9 +790,17 @@ export default function VideoPlayer({
       ['nexttrack', () => playNextVideo()],
       ['seekto', (details) => {
         if (details.seekTime !== undefined) {
-          if (videoRef.current) videoRef.current.currentTime = details.seekTime;
-          if (bgAudioRef.current) bgAudioRef.current.currentTime = details.seekTime;
-          setCurrentTime(details.seekTime);
+          const t = details.seekTime;
+          currentTimeRef.current = t;
+          setCurrentTime(t);
+          lastSeekTimeRef.current = Date.now();
+          pendingSeekTargetRef.current = t;
+          if (useEmbedFallback) {
+            sendIframeCommand('seekTo', [t, true]);
+          } else {
+            if (videoRef.current) videoRef.current.currentTime = t;
+            if (bgAudioRef.current) bgAudioRef.current.currentTime = t;
+          }
         }
       }],
       ['stop', () => togglePlayPause(false)],
@@ -777,13 +838,20 @@ export default function VideoPlayer({
     };
   }, [showSettings]);
 
-  // Autohide controls delay: 4s on mobile devices, 2.8s on desktop
-  const getHideDelay = () => {
-    const isMobile =
-      typeof window !== 'undefined' &&
-      (window.innerWidth <= 768 || 'ontouchstart' in window);
-    return isMobile ? 4000 : 2800;
-  };
+  // Autohide controls delay: 5s if mouse is not moving
+  const HIDE_CONTROLS_DELAY = 5000;
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
+      if (unlockPillTimerRef.current) clearTimeout(unlockPillTimerRef.current);
+      if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+      if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
+      if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
 
   const handleLockedTap = (e) => {
     if (e && e.stopPropagation) e.stopPropagation();
@@ -800,12 +868,14 @@ export default function VideoPlayer({
     setShowUnlockPill(false);
     setShowControls(true);
     if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
-    hideControlsTimerRef.current = setTimeout(() => {
-      setShowControls(false);
-    }, getHideDelay());
+    if (isPlaying && !showSettings) {
+      hideControlsTimerRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, HIDE_CONTROLS_DELAY);
+    }
   };
 
-  // Autohide controls logic
+  // Autohide controls logic: hide automatically if mouse is not moving for 5s
   const handleMouseMove = useCallback(() => {
     if (isLocked) return;
     setShowControls(true);
@@ -813,15 +883,32 @@ export default function VideoPlayer({
     if (isPlaying && !showSettings) {
       hideControlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
-      }, getHideDelay());
+      }, HIDE_CONTROLS_DELAY);
     }
   }, [isLocked, isPlaying, showSettings]);
 
   const handleMouseLeave = () => {
     if (isPlaying && !showSettings && !isLocked) {
       setShowControls(false);
+      if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
     }
   };
+
+  // Auto-hide controls after 5s when playback begins / resumes
+  useEffect(() => {
+    if (isPlaying && !showSettings && !isLocked) {
+      if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
+      hideControlsTimerRef.current = setTimeout(() => {
+        setShowControls(false);
+      }, HIDE_CONTROLS_DELAY);
+    } else {
+      setShowControls(true);
+      if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
+    }
+    return () => {
+      if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
+    };
+  }, [isPlaying, showSettings, isLocked]);
 
   // Hold to 2X Speed Pointer Handlers
   const handlePointerDown = (e) => {
@@ -875,25 +962,51 @@ export default function VideoPlayer({
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = e.clientX || (e.changedTouches && e.changedTouches[0]?.clientX) || 0;
     const relativeX = (clickX - rect.left) / rect.width;
-    const isRight = relativeX > 0.65;
-    const isLeft = relativeX < 0.35;
+    const side = relativeX > 0.65 ? 'right' : relativeX < 0.35 ? 'left' : 'center';
 
-    if (lastTapRef.current && now - lastTapRef.current.time < 300) {
-      if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
-      lastTapRef.current = null;
-      if (isRight) {
-        seekRelative(10);
-      } else if (isLeft) {
-        seekRelative(-10);
-      } else {
-        toggleFullscreen();
+    // Double-tap and multi-tap streak seeking (+10s, +20s, +30s...) on left or right side
+    if (
+      (side === 'left' || side === 'right') &&
+      tapStreakRef.current.side === side &&
+      now - tapStreakRef.current.lastTime < 450
+    ) {
+      if (singleTapTimerRef.current) {
+        clearTimeout(singleTapTimerRef.current);
+        singleTapTimerRef.current = null;
       }
-    } else {
-      lastTapRef.current = { time: now, x: relativeX };
+      tapStreakRef.current.count += 1;
+      tapStreakRef.current.lastTime = now;
+      const step = side === 'right' ? 10 : -10;
+      seekRelative(step);
+      triggerRipple(side, tapStreakRef.current.count * 10);
+      handleMouseMove();
+      return;
+    }
+
+    // First tap of a new gesture
+    tapStreakRef.current = { count: 1, side, lastTime: now };
+
+    if (side === 'left' || side === 'right') {
+      if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
       singleTapTimerRef.current = setTimeout(() => {
         togglePlayPause();
+        tapStreakRef.current = { count: 0, side: null, lastTime: 0 };
+        singleTapTimerRef.current = null;
+      }, 260);
+    } else {
+      if (lastTapRef.current && now - lastTapRef.current.time < 300 && lastTapRef.current.side === 'center') {
+        if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
         lastTapRef.current = null;
-      }, 250);
+        toggleFullscreen();
+      } else {
+        lastTapRef.current = { time: now, side: 'center' };
+        if (singleTapTimerRef.current) clearTimeout(singleTapTimerRef.current);
+        singleTapTimerRef.current = setTimeout(() => {
+          togglePlayPause();
+          lastTapRef.current = null;
+          singleTapTimerRef.current = null;
+        }, 220);
+      }
     }
   };
 
@@ -939,12 +1052,21 @@ export default function VideoPlayer({
     const rect = progressTrackRef.current.getBoundingClientRect();
     const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const targetTime = pos * targetDur;
+    currentTimeRef.current = targetTime;
     setCurrentTime(targetTime);
+    lastSeekTimeRef.current = Date.now();
+    pendingSeekTargetRef.current = targetTime;
     if (useEmbedFallback) {
       sendIframeCommand('seekTo', [targetTime, true]);
     } else if (videoRef.current) {
-      videoRef.current.currentTime = targetTime;
-      if (bgAudioRef.current) bgAudioRef.current.currentTime = targetTime;
+      try {
+        videoRef.current.currentTime = targetTime;
+      } catch (_) {}
+      if (bgAudioRef.current) {
+        try {
+          bgAudioRef.current.currentTime = targetTime;
+        } catch (_) {}
+      }
     }
   };
 
@@ -1073,15 +1195,23 @@ export default function VideoPlayer({
 
     const targetTime = targetDur > 0 ? Math.max(0, Math.min(targetDur, targetDur * fraction)) : 0;
 
+    currentTimeRef.current = targetTime;
     setCurrentTime(targetTime);
+    lastSeekTimeRef.current = Date.now();
+    pendingSeekTargetRef.current = targetTime;
+
     if (useEmbedFallback) {
       sendIframeCommand('seekTo', [targetTime, true]);
     } else {
       if (videoRef.current) {
-        videoRef.current.currentTime = targetTime;
+        try {
+          videoRef.current.currentTime = targetTime;
+        } catch (_) {}
       }
       if (bgAudioRef.current) {
-        bgAudioRef.current.currentTime = targetTime;
+        try {
+          bgAudioRef.current.currentTime = targetTime;
+        } catch (_) {}
       }
     }
     handleMouseMove();
@@ -1166,27 +1296,27 @@ export default function VideoPlayer({
         e.preventDefault();
         const digit = parseInt(e.key, 10);
         seekToPercent(digit * 0.1);
-      } else if (e.code === 'Space' || e.code === 'KeyK') {
+      } else if (e.code === 'Space' || e.code === 'KeyK' || e.key === 'k' || e.key === 'K') {
         e.preventDefault();
         togglePlayPause();
-      } else if (e.code === 'KeyL') {
+      } else if (e.code === 'KeyL' || e.key === 'l' || e.key === 'L') {
         e.preventDefault();
         seekRelative(10);
         handleMouseMove();
-      } else if (e.code === 'KeyJ') {
+      } else if (e.code === 'KeyJ' || e.key === 'j' || e.key === 'J') {
         e.preventDefault();
         seekRelative(-10);
         handleMouseMove();
-      } else if (e.code === 'KeyM') {
+      } else if (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') {
         e.preventDefault();
         toggleMute();
-      } else if (e.code === 'KeyF') {
+      } else if (e.code === 'KeyF' || e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         toggleFullscreen();
-      } else if (e.code === 'KeyT') {
+      } else if (e.code === 'KeyT' || e.key === 't' || e.key === 'T') {
         e.preventDefault();
         setIsTheater((prev) => !prev);
-      } else if (e.shiftKey && (e.code === 'KeyN' || e.key === 'N')) {
+      } else if (e.shiftKey && (e.code === 'KeyN' || e.key === 'N' || e.key === 'n')) {
         e.preventDefault();
         if (playNextVideo) playNextVideo();
       }
@@ -1517,21 +1647,53 @@ export default function VideoPlayer({
             <div className="yt-controls-row">
               {/* Left Controls */}
               <div className="yt-ctrls-left">
+                {/* Skip Backward 10s button */}
+                <button
+                  type="button"
+                  className="yt-ctrl-btn yt-skip-btn"
+                  onClick={() => {
+                    seekRelative(-10);
+                    handleMouseMove();
+                  }}
+                  title="Rewind 10s (j or ←)"
+                  aria-label="Rewind 10 seconds"
+                >
+                  <Rewind10Icon size={20} />
+                </button>
+
                 {/* Play / Pause button */}
                 <button
-                  className="yt-ctrl-btn"
+                  type="button"
+                  className="yt-ctrl-btn yt-play-btn"
                   onClick={() => togglePlayPause()}
                   title={isPlaying ? 'Pause (k)' : 'Play (k)'}
+                  aria-label={isPlaying ? 'Pause' : 'Play'}
                 >
                   {isPlaying ? <PauseIcon size={22} /> : <PlayIcon size={22} />}
                 </button>
 
+                {/* Skip Forward 10s button */}
+                <button
+                  type="button"
+                  className="yt-ctrl-btn yt-skip-btn"
+                  onClick={() => {
+                    seekRelative(10);
+                    handleMouseMove();
+                  }}
+                  title="Forward 10s (l or →)"
+                  aria-label="Skip forward 10 seconds"
+                >
+                  <Forward10Icon size={20} />
+                </button>
+
                 {/* Next Video button */}
                 <button
+                  type="button"
                   className="yt-ctrl-btn"
                   onClick={playNextVideo}
                   title="Next (SHIFT+N)"
                   disabled={!nextVideo}
+                  aria-label="Next video"
                 >
                   <NextTrackIcon size={20} />
                 </button>

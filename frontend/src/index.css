@@ -2474,19 +2474,25 @@ textarea {
   pointer-events: none;
 }
 
-.yt-custom-player-wrapper.controls-visible .yt-controller-bar,
-.yt-custom-player-wrapper:hover .yt-controller-bar {
+.yt-custom-player-wrapper.controls-visible .yt-controller-bar {
   opacity: 1;
   pointer-events: auto;
 }
 
 /* Screen Lock in Player */
 .yt-custom-player-wrapper.is-locked .yt-controller-bar,
-.yt-custom-player-wrapper.is-locked:hover .yt-controller-bar,
 .yt-custom-player-wrapper.is-locked .yt-player-top-bar {
   opacity: 0 !important;
   pointer-events: none !important;
   display: none !important;
+}
+
+/* Hide mouse cursor when controls autohide after 5s of mouse inactivity */
+.yt-custom-player-wrapper:not(.controls-visible) {
+  cursor: none;
+}
+.yt-custom-player-wrapper:not(.controls-visible) * {
+  cursor: none !important;
 }
 
 /* Minimalist Screen Lock Overlay (Positioned at bottom of video) */
