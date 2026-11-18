@@ -103,6 +103,8 @@ export default function VideoPlayer({
   const lastSeekTimeRef = useRef(0);
   const pendingSeekTargetRef = useRef(null);
   const tapStreakRef = useRef({ count: 0, side: null, lastTime: 0 });
+  const lastDisplaySecRef = useRef(0);
+  const lastIframeMsgTimeRef = useRef(0);
 
   const [useEmbedFallback, setUseEmbedFallback] = useState(() => isVercelDeployment);
 
@@ -120,6 +122,7 @@ export default function VideoPlayer({
   const [isPlaying, setIsPlaying] = useState(true);
   const [isBuffering, setIsBuffering] = useState(() => !isVercelDeployment);
   const [currentTime, setCurrentTime] = useState(0);
+  const [displayTime, setDisplayTime] = useState(0);
   const [duration, setDuration] = useState(() => parseDuration(video?.duration));
   const [volume, setVolume] = useState(100);
   const [isMuted, setIsMuted] = useState(false);
@@ -418,6 +421,25 @@ export default function VideoPlayer({
     }
   }, [useEmbedFallback, isPlaying, sendIframeCommand, requestWakeLock, releaseWakeLock, triggerFlash, isMuted, volume, playbackSpeed]);
 
+  // Unified playback time updater that keeps seconds stable at 1Hz (preventing multiple updates per second)
+  const updatePlaybackTime = useCallback((time, isSeek = false) => {
+    const targetDur = (duration > 0 ? duration : null)
+      || (videoRef.current?.duration > 0 ? videoRef.current.duration : null)
+      || parseDuration(video?.duration)
+      || 0;
+    const maxTime = targetDur > 0 ? targetDur : 999999;
+    const safeTime = Math.max(0, Math.min(maxTime, time));
+
+    currentTimeRef.current = safeTime;
+    setCurrentTime(safeTime);
+
+    const sec = Math.floor(safeTime);
+    if (isSeek || sec !== lastDisplaySecRef.current) {
+      lastDisplaySecRef.current = sec;
+      setDisplayTime(sec);
+    }
+  }, [duration, video?.duration]);
+
   // Seek relative (forward / backward seconds)
   const seekRelative = useCallback((seconds) => {
     const targetDur = (duration > 0 ? duration : null)
@@ -445,10 +467,9 @@ export default function VideoPlayer({
 
     const target = Math.max(0, Math.min(maxTime, currentPos + seconds));
 
-    currentTimeRef.current = target;
-    setCurrentTime(target);
     lastSeekTimeRef.current = Date.now();
     pendingSeekTargetRef.current = target;
+    updatePlaybackTime(target, true);
 
     if (useEmbedFallback) {
       sendIframeCommand('seekTo', [target, true]);
@@ -472,7 +493,7 @@ export default function VideoPlayer({
     } else {
       triggerRipple('right', absSeconds);
     }
-  }, [useEmbedFallback, duration, video?.duration, sendIframeCommand, triggerRipple]);
+  }, [useEmbedFallback, duration, video?.duration, sendIframeCommand, triggerRipple, updatePlaybackTime]);
 
   // Native HTML5 <video> Event Handlers
   const handleVideoPlay = () => {
@@ -506,8 +527,7 @@ export default function VideoPlayer({
       if (isRecentSeek && videoRef.current.seeking) return;
 
       const vTime = videoRef.current.currentTime || 0;
-      currentTimeRef.current = vTime;
-      setCurrentTime(vTime);
+      updatePlaybackTime(vTime, false);
       const aud = bgAudioRef.current;
       if (aud && !aud.seeking && !videoRef.current.seeking && Math.abs(vTime - aud.currentTime) > 0.3) {
         aud.currentTime = vTime;
@@ -518,8 +538,7 @@ export default function VideoPlayer({
   const handleAudioTimeUpdate = () => {
     if (bgAudioRef.current && document.hidden) {
       const aTime = bgAudioRef.current.currentTime || 0;
-      currentTimeRef.current = aTime;
-      setCurrentTime(aTime);
+      updatePlaybackTime(aTime, false);
     }
   };
 
@@ -568,25 +587,26 @@ export default function VideoPlayer({
           }
         } catch (_) {}
 
+        // If the iframe is actively delivering real time updates, NEVER increment artificially!
+        const isIframeActivelyUpdating = Date.now() - lastIframeMsgTimeRef.current < 2000;
+        if (isIframeActivelyUpdating) return;
+
         // Don't advance time artificially if user just seeked within 600ms
         if (Date.now() - lastSeekTimeRef.current < 600) return;
 
-        setCurrentTime((prev) => {
-          const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
-          if (targetDur > 0 && prev >= targetDur) {
-            if (isLooping) {
-              sendIframeCommand('seekTo', [0, true]);
-              sendIframeCommand('playVideo');
-              currentTimeRef.current = 0;
-              return 0;
-            }
-            handleVideoEnded();
-            return targetDur;
+        const targetDur = duration > 0 ? duration : parseDuration(video?.duration);
+        const prev = currentTimeRef.current;
+        if (targetDur > 0 && prev >= targetDur) {
+          if (isLooping) {
+            sendIframeCommand('seekTo', [0, true]);
+            sendIframeCommand('playVideo');
+            updatePlaybackTime(0, true);
+            return;
           }
-          const nextTime = prev + 1;
-          currentTimeRef.current = nextTime;
-          return nextTime;
-        });
+          handleVideoEnded();
+          return;
+        }
+        updatePlaybackTime(prev + 1, false);
       }, 1000);
     }
 
@@ -598,18 +618,21 @@ export default function VideoPlayer({
         const info = data.info || (typeof data.data === 'object' ? data.data : null);
         if (info && typeof info === 'object') {
           if (typeof info.currentTime === 'number' && !isNaN(info.currentTime)) {
-            // Discard stale pre-seek time reports from iframe
+            lastIframeMsgTimeRef.current = Date.now();
             const isRecentSeek = Date.now() - lastSeekTimeRef.current < 1000;
             if (isRecentSeek && pendingSeekTargetRef.current !== null) {
               if (Math.abs(info.currentTime - pendingSeekTargetRef.current) < 1.5) {
                 pendingSeekTargetRef.current = null;
-                currentTimeRef.current = info.currentTime;
-                setCurrentTime(info.currentTime);
+                updatePlaybackTime(info.currentTime, true);
               }
             } else {
               pendingSeekTargetRef.current = null;
-              currentTimeRef.current = info.currentTime;
-              setCurrentTime(info.currentTime);
+              // Smooth out minor sub-second backwards jitter during normal playback
+              let safeTime = info.currentTime;
+              if (safeTime < currentTimeRef.current && currentTimeRef.current - safeTime < 0.5) {
+                safeTime = currentTimeRef.current;
+              }
+              updatePlaybackTime(safeTime, false);
             }
           }
           if (typeof info.duration === 'number' && info.duration > 0) {
@@ -624,7 +647,7 @@ export default function VideoPlayer({
             if (isLooping) {
               sendIframeCommand('seekTo', [0, true]);
               sendIframeCommand('playVideo');
-              currentTimeRef.current = 0;
+              updatePlaybackTime(0, true);
             } else {
               handleVideoEnded();
             }
@@ -638,7 +661,7 @@ export default function VideoPlayer({
       clearInterval(syncInterval);
       window.removeEventListener('message', handleWindowMessage);
     };
-  }, [useEmbedFallback, isPlaying, duration, video?.duration, isLooping, handleVideoEnded, sendIframeCommand]);
+  }, [useEmbedFallback, isPlaying, duration, video?.duration, isLooping, handleVideoEnded, sendIframeCommand, updatePlaybackTime]);
 
   // Sync duration whenever video prop updates (from route change or async details fetch)
   useEffect(() => {
@@ -654,7 +677,10 @@ export default function VideoPlayer({
     lastSeekTimeRef.current = 0;
     pendingSeekTargetRef.current = null;
     tapStreakRef.current = { count: 0, side: null, lastTime: 0 };
+    lastDisplaySecRef.current = 0;
+    lastIframeMsgTimeRef.current = 0;
     setCurrentTime(0);
+    setDisplayTime(0);
     const parsedDur = parseDuration(video?.duration);
     setDuration(parsedDur);
     setIsBuffering(!isVercelDeployment);
@@ -791,10 +817,9 @@ export default function VideoPlayer({
       ['seekto', (details) => {
         if (details.seekTime !== undefined) {
           const t = details.seekTime;
-          currentTimeRef.current = t;
-          setCurrentTime(t);
           lastSeekTimeRef.current = Date.now();
           pendingSeekTargetRef.current = t;
+          updatePlaybackTime(t, true);
           if (useEmbedFallback) {
             sendIframeCommand('seekTo', [t, true]);
           } else {
@@ -819,7 +844,7 @@ export default function VideoPlayer({
         } catch (_) { }
       }
     };
-  }, [video, vId, togglePlayPause, seekRelative, playNextVideo]);
+  }, [video, vId, togglePlayPause, seekRelative, playNextVideo, updatePlaybackTime]);
 
   // Close settings popup when clicking outside
   useEffect(() => {
@@ -1052,10 +1077,9 @@ export default function VideoPlayer({
     const rect = progressTrackRef.current.getBoundingClientRect();
     const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const targetTime = pos * targetDur;
-    currentTimeRef.current = targetTime;
-    setCurrentTime(targetTime);
     lastSeekTimeRef.current = Date.now();
     pendingSeekTargetRef.current = targetTime;
+    updatePlaybackTime(targetTime, true);
     if (useEmbedFallback) {
       sendIframeCommand('seekTo', [targetTime, true]);
     } else if (videoRef.current) {
@@ -1195,10 +1219,9 @@ export default function VideoPlayer({
 
     const targetTime = targetDur > 0 ? Math.max(0, Math.min(targetDur, targetDur * fraction)) : 0;
 
-    currentTimeRef.current = targetTime;
-    setCurrentTime(targetTime);
     lastSeekTimeRef.current = Date.now();
     pendingSeekTargetRef.current = targetTime;
+    updatePlaybackTime(targetTime, true);
 
     if (useEmbedFallback) {
       sendIframeCommand('seekTo', [targetTime, true]);
@@ -1215,7 +1238,7 @@ export default function VideoPlayer({
       }
     }
     handleMouseMove();
-  }, [duration, video?.duration, useEmbedFallback, sendIframeCommand, handleMouseMove]);
+  }, [duration, video?.duration, useEmbedFallback, sendIframeCommand, handleMouseMove, updatePlaybackTime]);
 
   const toggleMute = useCallback(() => {
     if (useEmbedFallback) {
@@ -1732,7 +1755,7 @@ export default function VideoPlayer({
 
                 {/* Time Display (e.g. 0:10 / 4:41) */}
                 <div className="yt-time-display">
-                  <span>{formatTime(currentTime)}</span>
+                  <span>{formatTime(displayTime)}</span>
                   <span className="yt-time-sep">/</span>
                   <span>{effectiveDuration > 0 ? formatTime(effectiveDuration) : (video?.duration || '0:00')}</span>
                 </div>
